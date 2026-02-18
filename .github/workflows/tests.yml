@@ -1,0 +1,58 @@
+name: tests
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Install dependencies
+      run: uv sync --extra dev
+
+    - name: Lint
+      run: uv run ruff check demucs_mlx
+
+    - name: Type check
+      run: uv run pyright
+
+  test:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run kernel tests
+      run: uv run python tests/test_metal_kernels.py
+
+    - name: Test CLI
+      run: uv run demucs-mlx --list-models
+
+    - name: Test import
+      run: |
+        uv run python -c "
+        from demucs_mlx import Separator, save_audio, list_models
+        models = list_models()
+        print('Models:', models)
+        assert 'htdemucs' in models['single']
+        print('Import test passed')
+        "
