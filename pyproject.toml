@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demucs-mlx"
+dynamic = ["version"]
+description = "Music source separation with MLX acceleration."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Demucs-MLX Contributors", email = "maintainers@example.com"}]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "einops",
+  "dora-search",
+  "julius>=0.2.3",
+  "mlx>=0.30.3",
+  "mlx-audio-io",
+  "numpy",
+  "omegaconf",
+  "packaging",
+  "openunmix",
+  "pyyaml",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build",
+  "pyright",
+  "ruff",
+]
+
+train = [
+  "hydra-colorlog>=1.1",
+  "hydra-core>=1.1",
+  "musdb",
+  "museval",
+  "treetable",
+]
+
+quant = [
+  "diffq>=0.2.1",
+]
+
+archive = [
+  "lameenc>=1.2",
+]
+
+[project.scripts]
+demucs-mlx = "demucs_mlx.separate:main"
+
+[project.urls]
+Homepage = "https://github.com/ssmall256/demucs-mlx/"
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+
+[tool.ruff]
+line-length = 100
+exclude = ["demucs_mlx/archive"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "demucs_mlx.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["demucs_mlx*"]
+
+[tool.setuptools.package-data]
+demucs_mlx = ["py.typed", "remote/*.txt", "remote/*.yaml"]
