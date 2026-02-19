@@ -358,9 +358,15 @@ def convert_htdemucs_weights(
     """
     Convert Demucs/HDemucs/HTDemucs PyTorch weights to MLX format.
     """
-    # Lazy imports to avoid Torch overhead on simple load
-    from .apply import BagOfModels
-    from .pretrained import get_model
+    # Lazy imports — requires the PyTorch demucs package for conversion
+    try:
+        from demucs.apply import BagOfModels
+        from demucs.pretrained import get_model
+    except ImportError:
+        raise ImportError(
+            "Model conversion requires the PyTorch 'demucs' package. "
+            "Install with: pip install 'demucs-mlx[convert]'"
+        ) from None
 
     if model_name not in MLX_MODEL_REGISTRY:
         raise ValueError(

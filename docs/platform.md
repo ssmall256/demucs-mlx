@@ -12,7 +12,7 @@ Typical flow:
 ```bash
 uv lock
 uv sync
-uv run demucs-mlx -d mlx /path/to/audio.wav
+uv run demucs-mlx /path/to/audio.wav
 ```
 
 ## Linux
@@ -23,7 +23,7 @@ uv run demucs-mlx -d mlx /path/to/audio.wav
 ```bash
 uv lock
 uv sync
-uv run demucs-mlx -d cpu /path/to/audio.wav
+uv run demucs-mlx /path/to/audio.wav
 ```
 
 ## Windows
@@ -34,5 +34,5 @@ uv run demucs-mlx -d cpu /path/to/audio.wav
 ```powershell
 uv lock
 uv sync
-uv run demucs-mlx -d cpu "C:\\path\\to\\audio.wav"
+uv run demucs-mlx "C:\\path\\to\\audio.wav"
 ```
