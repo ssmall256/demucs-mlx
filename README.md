@@ -4,7 +4,7 @@ Music source separation optimized for Apple Silicon, powered by [MLX](https://gi
 
 ## Features
 
-- **~67x realtime** on Apple Silicon — 2.3x faster than Demucs with PyTorch MPS
+- **~67x realtime** on Apple Silicon — 2.4x faster than Demucs with PyTorch MPS
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
@@ -78,9 +78,9 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 
 | Package | Backend | Time | Speedup |
 |---------|---------|------|---------|
-| `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 1x |
-| `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 7.6x |
-| `demucs-mlx` 1.0.0 | MLX + Metal | 3.0s | **17x** |
+| `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 0.1x |
+| `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 1x |
+| `demucs-mlx` 1.0.0 | MLX + Metal | 2.9s | **2.4x** |
 
 *Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
