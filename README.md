@@ -1,6 +1,8 @@
 # demucs-mlx
 
-Inference-only music source separation optimized for Apple Silicon, powered by [MLX](https://github.com/ml-explore/mlx). A pure-MLX reimplementation of [Demucs](https://github.com/facebookresearch/demucs) with custom Metal kernels for maximum throughput.
+Split any song into its individual stems — vocals, drums, bass, and other instruments — directly on your Mac.
+
+demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://github.com/adefossez/demucs) music source separation model, built on [MLX](https://github.com/ml-explore/mlx). No PyTorch required.
 
 ## Features
 
