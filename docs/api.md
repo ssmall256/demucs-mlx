@@ -58,7 +58,7 @@ Separate an audio file. Reads the file using `mlx-audio-io`.
 
 **Returns:** Same as `separate_tensor`.
 
-**Note:** The audio file's sample rate must match the model's sample rate (44100 Hz for all current models). Resampling is not yet supported.
+**Note:** If the audio file's sample rate differs from the model's (44100 Hz for all current models), it will be automatically resampled via mlx-audio-io.
 
 ## `save_audio(wav, path, samplerate, ...)`
 
