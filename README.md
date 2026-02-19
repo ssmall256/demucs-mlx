@@ -5,6 +5,7 @@ Inference-only music source separation optimized for Apple Silicon, powered by [
 ## Features
 
 - **~67x realtime** on Apple Silicon — 2.4x faster than Demucs with PyTorch MPS
+- **Bit-exact parity** with upstream Demucs stems (within floating-point tolerance)
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
