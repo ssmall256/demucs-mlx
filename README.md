@@ -103,4 +103,4 @@ Pre-converted MLX weights are cached under `~/.cache/demucs-mlx`. Delete to forc
 
 ## License
 
-MIT. See `LICENSE` for details.
+MIT. Based on [Demucs](https://github.com/adefossez/demucs) by Meta Research. See `LICENSE` for details.
