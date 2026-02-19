@@ -19,3 +19,4 @@ Session.vim
 *.pyo
 *.so
 .DS_Store
+.claude/

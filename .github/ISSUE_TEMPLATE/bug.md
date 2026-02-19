@@ -28,6 +28,7 @@ labels: 'bug'
 
 <!-- Include as many relevant details about the environment you experienced the bug in -->
 
-- Python and PyTorch version:
-- Operating system and version (desktop or mobile):
-- Hardware (gpu or cpu, amount of RAM etc.):
+- Python version:
+- macOS version:
+- Apple Silicon model (e.g. M1, M2, M4 Max):
+- demucs-mlx version:
