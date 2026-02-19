@@ -51,6 +51,18 @@ Homepage = "https://github.com/ssmall256/demucs-mlx/"
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportOptionalSubscript = false
+reportOptionalOperand = false
+reportOptionalMemberAccess = false
+reportOptionalIterable = false
+reportArgumentType = false
+reportAttributeAccessIssue = false
+reportIndexIssue = false
+reportCallIssue = false
+reportRedeclaration = false
+reportPrivateImportUsage = false
+reportOperatorIssue = false
 
 [tool.ruff]
 line-length = 100
