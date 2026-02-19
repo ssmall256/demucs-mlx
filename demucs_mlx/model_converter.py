@@ -5,8 +5,11 @@
 # LICENSE file in the root directory of this source tree.
 """Convert PyTorch models to MLX models."""
 
+import logging
 import typing as tp
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def get_mlx_cache_dir() -> Path:
@@ -33,7 +36,7 @@ def get_mlx_model(name: str, repo: tp.Optional[Path] = None):
         return model
     except FileNotFoundError:
         # If we are here, the model is missing.
-        print(f"[Model Converter] Cache miss for '{name}'. Converting from PyTorch...")
+        logger.info("Cache miss for '%s'. Converting from PyTorch...", name)
         
         # This step might take a few seconds but only happens once.
         convert_htdemucs_weights(
@@ -44,6 +47,6 @@ def get_mlx_model(name: str, repo: tp.Optional[Path] = None):
         )
         
         # Load the newly converted model
-        print("[Model Converter] Loading converted model...")
+        logger.info("Loading converted model...")
         model = load_mlx_model(name, cache_dir=str(cache_dir), auto_convert=False, verbose=True)
         return model

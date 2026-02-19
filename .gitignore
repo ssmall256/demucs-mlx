@@ -10,9 +10,12 @@ Session.vim
 /release
 /release_models
 /separated
-/tests
 /trash
 /misc
 /mdx
 .mypy_cache
+.pytest_cache
+*.pyc
+*.pyo
+*.so
 .DS_Store

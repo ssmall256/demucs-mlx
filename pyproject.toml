@@ -21,6 +21,7 @@ dependencies = [
   "julius>=0.2.3",
   "mlx>=0.30.3",
   "mlx-audio-io",
+  "mlx-spectro",
   "numpy",
   "omegaconf",
   "packaging",
