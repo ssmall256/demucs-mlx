@@ -1,6 +1,6 @@
 # demucs-mlx
 
-Music source separation optimized for Apple Silicon, powered by [MLX](https://github.com/ml-explore/mlx). A pure-MLX fork of [Demucs](https://github.com/facebookresearch/demucs) with custom Metal kernels for maximum throughput.
+Inference-only music source separation optimized for Apple Silicon, powered by [MLX](https://github.com/ml-explore/mlx). A pure-MLX reimplementation of [Demucs](https://github.com/facebookresearch/demucs) with custom Metal kernels for maximum throughput.
 
 ## Features
 
