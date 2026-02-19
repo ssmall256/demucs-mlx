@@ -18,7 +18,6 @@ MLX-native inference release. No PyTorch required at runtime.
 ### Differences from upstream Demucs
 
 - Inference only — no training code
-- `device` parameter only accepts `"mlx"` (no CUDA/MPS/CPU)
 - Callbacks not yet supported in `Separator`
-- Audio resampling not yet supported (input must match model sample rate)
+- Input audio must match model sample rate (44100 Hz) — automatic resampling not yet wired up
 - PyTorch only needed for initial model weight conversion (`pip install 'demucs-mlx[convert]'`)
