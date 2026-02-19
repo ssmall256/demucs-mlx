@@ -9,7 +9,7 @@ description = "Music source separation with MLX acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
-authors = [{name = "Demucs-MLX Contributors", email = "maintainers@example.com"}]
+authors = [{name = "ssmall256", email = "ssmall256@users.noreply.github.com"}]
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Topic :: Multimedia :: Sound/Audio",
@@ -37,20 +37,9 @@ dev = [
   "ruff",
 ]
 
-train = [
-  "hydra-colorlog>=1.1",
-  "hydra-core>=1.1",
-  "musdb",
-  "museval",
-  "treetable",
-]
-
-quant = [
-  "diffq>=0.2.1",
-]
-
-archive = [
-  "lameenc>=1.2",
+convert = [
+  "demucs>=4.0",
+  "torch",
 ]
 
 [project.scripts]
@@ -65,7 +54,7 @@ typeCheckingMode = "basic"
 
 [tool.ruff]
 line-length = 100
-exclude = ["demucs_mlx/archive"]
+exclude = []
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

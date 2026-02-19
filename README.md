@@ -22,17 +22,13 @@ Music source separation optimized for Apple Silicon, powered by [MLX](https://gi
 pip install demucs-mlx
 ```
 
-Or with uv:
+On first run, demucs-mlx will automatically download and convert the PyTorch weights to MLX format. This requires the `convert` extra:
 
 ```bash
-uv sync
+pip install 'demucs-mlx[convert]'
 ```
 
-For development extras:
-
-```bash
-uv sync --extra dev
-```
+Once weights are cached in `~/.cache/demucs-mlx`, the `convert` extra is no longer needed.
 
 ## CLI usage
 
