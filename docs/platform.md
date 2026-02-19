@@ -28,11 +28,4 @@ uv run demucs-mlx /path/to/audio.wav
 
 ## Windows
 
-- Python >= 3.10 required.
-- Install FFmpeg (use a trusted Windows package manager or official builds).
-
-```powershell
-uv lock
-uv sync
-uv run demucs-mlx "C:\\path\\to\\audio.wav"
-```
+Not supported. MLX requires macOS or Linux.
