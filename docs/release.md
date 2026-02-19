@@ -19,5 +19,5 @@ MLX-native inference release. No PyTorch required at runtime.
 
 - Inference only — no training code
 - Callbacks not yet supported in `Separator`
-- Input audio must match model sample rate (44100 Hz) — automatic resampling not yet wired up
+- Automatic resampling via mlx-audio-io when input sample rate differs from model (44100 Hz)
 - PyTorch only needed for initial model weight conversion (`pip install 'demucs-mlx[convert]'`)

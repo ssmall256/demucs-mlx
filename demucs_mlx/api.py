@@ -12,7 +12,6 @@ class Separator:
         self,
         model: str = "htdemucs",
         repo: tp.Optional[Path] = None,
-        device: str = "mlx",
         shifts: int = 1,
         overlap: float = 0.25,
         split: bool = True,
@@ -27,10 +26,6 @@ class Separator:
             raise ValueError(f"Unknown model '{model}'. Available: {known}")
         if repo is not None:
             raise NotImplementedError("Custom repos are not supported in MLX mode.")
-        if device not in {"mlx", "cpu"}:
-            raise ValueError("MLX backend only supports device='mlx' or 'cpu'.")
-        if device == "cpu":
-            raise NotImplementedError("device='cpu' is not implemented in MLX mode.")
         if jobs not in (0, 1):
             raise ValueError("MLX backend does not support multi-process jobs.")
         if callback is not None:
@@ -42,7 +37,6 @@ class Separator:
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
         self.model_name = model
-        self.device = device
         self.shifts = int(shifts)
         self.overlap = float(overlap)
         self.split = split
@@ -184,10 +178,8 @@ class Separator:
         # mlx_audio_io.load returns (mx.array, sample_rate) in shape [frames, channels]
         audio_mx, sr = mac.load(str(path), dtype="float32")
         if sr != self.samplerate:
-            raise ValueError(
-                f"Input sample rate {sr} does not match model sample rate {self.samplerate}. "
-                "Resampling is not supported in MLX mode."
-            )
+            # Resample to model sample rate via mlx-audio-io
+            audio_mx, sr = mac.load(str(path), sr=self.samplerate, dtype="float32")
         # Convert to numpy and transpose to (channels, frames)
         wav = np.array(audio_mx, copy=False).T
         return self.separate_tensor(wav, return_mx=return_mx)
