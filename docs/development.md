@@ -25,7 +25,7 @@ uv run ruff format demucs_mlx
 ## Tests
 
 ```bash
-make tests
+make test
 ```
 
 ## Build

@@ -1,6 +1,6 @@
-# Release notes for Demucs-MLX
+# Release notes for demucs-mlx
 
-## V4.1.0a3
+## v1.0.0
 
 MLX-native inference release. No PyTorch required at runtime.
 
@@ -8,27 +8,17 @@ MLX-native inference release. No PyTorch required at runtime.
 - Custom fused Metal kernels: GroupNorm+GELU, GroupNorm+GLU, GLU, OLA, complex-to-interleaved
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - Audio I/O via mlx-audio-io (replaces torchcodec/torchaudio/soundfile)
-- ~67x realtime on Apple Silicon
+- STFT/iSTFT via mlx-spectro
+- ~67x realtime on Apple Silicon — 2.4x faster than Demucs with PyTorch MPS
 - Public Python API: `Separator`, `save_audio`, `list_models`
 - CLI: `demucs-mlx` with threaded audio prefetch and parallel stem writing
-- Reduced redundant `mx.eval()` synchronization points
 - Native Conv1d resampling (replaces torchaudio resampling)
+- Optional `[convert]` extra for one-time PyTorch weight conversion
 
-### Breaking changes from upstream Demucs
+### Differences from upstream Demucs
 
+- Inference only — no training code
 - `device` parameter only accepts `"mlx"` (no CUDA/MPS/CPU)
 - Callbacks not yet supported in `Separator`
 - Audio resampling not yet supported (input must match model sample rate)
-- PyTorch only needed for initial model weight conversion (lazy import)
-
-## V4.0.1, 8th of September 2023
-
-**From this version, Python 3.7 is no longer supported.**
-
-Various improvements by @CarlGao4. Support for `segment` param inside of HTDemucs model.
-
-## V4.0.0, 7th of December 2022
-
-Adding hybrid transformer Demucs model.
-
-Added experimental 6 sources model `htdemucs_6s` (`drums`, `bass`, `other`, `vocals`, `piano`, `guitar`).
+- PyTorch only needed for initial model weight conversion (`pip install 'demucs-mlx[convert]'`)
