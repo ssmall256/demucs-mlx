@@ -1,6 +1,6 @@
-"""Demucs spectral wrappers around ``spectral_ops``.
+"""Demucs spectral wrappers around ``mlx_spectro``.
 
-Re-exports the core ``SpectralTransform`` from ``spectral_ops`` and adds
+Re-exports the core ``SpectralTransform`` from ``mlx_spectro`` and adds
 ``spectro`` / ``ispectro`` convenience functions that handle the
 multi-dimensional tensor layouts used by Demucs models (3-D for STFT,
 4-D and 5-D for iSTFT).
@@ -9,8 +9,7 @@ multi-dimensional tensor layouts used by Demucs models (3-D for STFT,
 from typing import Optional
 
 import mlx.core as mx
-
-from .spectral_ops import (
+from mlx_spectro import (
     SpectralTransform,
     WindowLike,
     get_transform_mlx,

@@ -4,11 +4,12 @@ Music source separation optimized for Apple Silicon, powered by [MLX](https://gi
 
 ## Features
 
-- **~67x realtime** on Apple Silicon (M-series)
+- **~67x realtime** on Apple Silicon — 2.3x faster than Demucs with PyTorch MPS
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
-- Audio I/O via [mlx-audio-io](https://github.com/samilton/mlx-audio-io)
+- Audio I/O via [mlx-audio-io](https://github.com/ssmall256/mlx-audio-io)
+- STFT/iSTFT via [mlx-spectro](https://github.com/ssmall256/mlx-spectro)
 
 ## Requirements
 
@@ -70,6 +71,18 @@ To keep outputs as MLX arrays (avoids GPU-to-CPU copy):
 ```python
 origin, stems = separator.separate_audio_file("song.wav", return_mx=True)
 ```
+
+## Performance
+
+Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with default settings:
+
+| Package | Backend | Time | Speedup |
+|---------|---------|------|---------|
+| `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 1x |
+| `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 7.6x |
+| `demucs-mlx` 1.0.0 | MLX + Metal | 3.0s | **17x** |
+
+*Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
 ## Models
 
