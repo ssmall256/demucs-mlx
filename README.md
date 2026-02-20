@@ -46,7 +46,7 @@ Options:
 -o, --out           Output directory (default: separated)
 --shifts            Number of random shifts (default: 1)
 --overlap           Overlap ratio (default: 0.25)
--b, --batch-size    Batch size (default: 10)
+-b, --batch-size    Batch size (default: 8)
 --write-workers     Concurrent writer threads (default: 1)
 --list-models       List available models
 -v, --verbose       Verbose logging

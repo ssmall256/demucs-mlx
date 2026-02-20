@@ -26,7 +26,7 @@ for name, audio in stems.items():
 - **overlap** (`float`): Overlap ratio between segments. Default `0.25`. Must be in `[0, 1)`.
 - **split** (`bool`): Whether to split audio into segments. Default `True`.
 - **segment** (`float | None`): Segment length in seconds. Default `None` (uses model default).
-- **batch_size** (`int`): Number of segments to process in parallel. Default `10`.
+- **batch_size** (`int`): Number of segments to process in parallel. Default `8`.
 - **progress** (`bool`): Show progress bar. Default `False`.
 
 ### Properties

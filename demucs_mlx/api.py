@@ -18,7 +18,7 @@ class Separator:
         segment: tp.Optional[float] = None,
         jobs: int = 0,
         progress: bool = False,
-        batch_size: int = 10,
+        batch_size: int = 8,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
     ):

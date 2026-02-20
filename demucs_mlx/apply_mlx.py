@@ -72,7 +72,7 @@ def apply_model(
     progress: bool = False,
     num_workers: int = 0,
     segment: tp.Optional[float] = None,
-    batch_size: int = 10,
+    batch_size: int = 8,
 ):
     progress_enabled = bool(progress)
     if num_workers > 0:
