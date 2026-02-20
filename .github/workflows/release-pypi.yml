@@ -1,4 +1,4 @@
-name: publish
+name: release-pypi
 
 on:
   release:
@@ -25,25 +25,8 @@ jobs:
         name: dist
         path: dist/
 
-  testpypi:
+  publish:
     needs: build
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-    - uses: actions/download-artifact@v4
-      with:
-        name: dist
-        path: dist/
-
-    - name: Publish to TestPyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/
-
-  pypi:
-    needs: testpypi
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
