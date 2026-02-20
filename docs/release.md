@@ -9,7 +9,7 @@ MLX-native inference release. No PyTorch required at runtime.
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - Audio I/O via mlx-audio-io (replaces torchcodec/torchaudio/soundfile)
 - STFT/iSTFT via mlx-spectro
-- ~67x realtime on Apple Silicon — 2.4x faster than Demucs with PyTorch MPS
+- ~73x realtime on Apple Silicon — 2.6x faster than Demucs with PyTorch MPS
 - Public Python API: `Separator`, `save_audio`, `list_models`
 - CLI: `demucs-mlx` with threaded audio prefetch and parallel stem writing
 - Native Conv1d resampling (replaces torchaudio resampling)

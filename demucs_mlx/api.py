@@ -18,6 +18,7 @@ class Separator:
         segment: tp.Optional[float] = None,
         jobs: int = 0,
         progress: bool = False,
+        batch_size: int = 10,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
     ):
@@ -36,11 +37,14 @@ class Separator:
             raise ValueError("overlap must be in [0, 1).")
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
+        if int(batch_size) <= 0:
+            raise ValueError("batch_size must be > 0.")
         self.model_name = model
         self.shifts = int(shifts)
         self.overlap = float(overlap)
         self.split = split
         self.segment = float(segment) if segment is not None else None
+        self.batch_size = int(batch_size)
         self.jobs = jobs
         self.progress = progress
         self.callback = callback
@@ -155,6 +159,7 @@ class Separator:
             overlap=self.overlap,
             segment=self.segment,
             progress=self.progress,
+            batch_size=self.batch_size,
         )
         mx.eval(estimates)
         stems_mx = estimates[0]
