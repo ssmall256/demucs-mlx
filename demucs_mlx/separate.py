@@ -233,7 +233,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     parser.add_argument("--segment", type=float, default=None, help="Segment length in seconds")
     parser.add_argument("--overlap", type=float, default=0.25, help="Overlap ratio")
     parser.add_argument("--shifts", type=int, default=1, help="Number of random shifts")
-    parser.add_argument("-b", "--batch-size", type=int, default=10, help="Batch size for inference")
+    parser.add_argument("-b", "--batch-size", type=int, default=8, help="Batch size for inference")
     parser.add_argument("--write-workers", type=int, default=1,
                         help="Number of concurrent audio writer threads")
     parser.add_argument("--prefetch-tracks", type=int, default=2,
