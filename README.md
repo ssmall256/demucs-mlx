@@ -6,7 +6,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 ## Features
 
-- **~67x realtime** on Apple Silicon — 2.4x faster than Demucs with PyTorch MPS
+- **~73x realtime** on Apple Silicon — 2.6x faster than Demucs with PyTorch MPS
 - **Bit-exact parity** with upstream Demucs stems (within floating-point tolerance)
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
@@ -46,7 +46,7 @@ Options:
 -o, --out           Output directory (default: separated)
 --shifts            Number of random shifts (default: 1)
 --overlap           Overlap ratio (default: 0.25)
--b, --batch-size    Batch size (default: 4)
+-b, --batch-size    Batch size (default: 10)
 --write-workers     Concurrent writer threads (default: 1)
 --list-models       List available models
 -v, --verbose       Verbose logging
@@ -79,7 +79,7 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 |---------|---------|------|---------|
 | `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 0.1x |
 | `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 1x |
-| `demucs-mlx` 1.0.0 | MLX + Metal | 2.9s | **2.4x** |
+| `demucs-mlx` 1.0.0 | MLX + Metal | 2.7s | **2.6x** |
 
 *Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
