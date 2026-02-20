@@ -79,7 +79,7 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 |---------|---------|------|---------|
 | `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 0.1x |
 | `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 1x |
-| `demucs-mlx` 1.0.0 | MLX + Metal | 2.7s | **2.6x** |
+| `demucs-mlx` 1.1.0 | MLX + Metal | 2.7s | **2.6x** |
 
 *Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
