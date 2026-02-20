@@ -1,6 +1,7 @@
 name: release-testpypi
 
 on:
+  workflow_dispatch:
   release:
     types: [published]
 
