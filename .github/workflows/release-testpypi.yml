@@ -15,10 +15,13 @@ jobs:
         python-version: "3.12"
 
     - name: Install build tools
-      run: pip install build
+      run: pip install build twine
 
     - name: Build sdist and wheel
       run: python -m build
+
+    - name: Validate metadata
+      run: python -m twine check dist/*
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -42,3 +45,37 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/
+        attestations: false
+
+  smoke-test:
+    needs: publish
+    runs-on: macos-latest
+    steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install from TestPyPI
+      run: |
+        for i in {1..12}; do
+          pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple \
+            demucs-mlx && break
+          if [ "$i" -eq 12 ]; then
+            echo "Failed to install after 12 attempts"
+            exit 1
+          fi
+          sleep 10
+        done
+
+    - name: Smoke test
+      run: |
+        python -c "
+        from demucs_mlx import Separator, list_models, save_audio
+        models = list_models()
+        print('Models:', models)
+        assert 'htdemucs' in models['single']
+        import demucs_mlx
+        print(f'demucs-mlx {demucs_mlx.__version__} smoke test passed')
+        "
