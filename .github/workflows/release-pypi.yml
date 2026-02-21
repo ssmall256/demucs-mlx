@@ -1,42 +1,90 @@
-name: release-pypi
+name: Release (PyPI)
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      version:
+        description: "Version to publish (for example: 1.2.0)"
+        required: true
+        type: string
 
 jobs:
-  build:
-    runs-on: macos-latest
+  build-artifacts:
+    name: Build release artifacts
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Install build tools
-      run: pip install build
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: Build sdist and wheel
-      run: python -m build
+      - name: Install packaging tools
+        run: python -m pip install --upgrade pip build twine
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: dist
-        path: dist/
+      - name: Build sdist and wheel
+        run: python -m build
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
+      - name: Validate metadata
+        run: python -m twine check dist/*
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist/*
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-24.04
+    needs: [build-artifacts]
     environment: pypi
     permissions:
       id-token: write
     steps:
-    - uses: actions/download-artifact@v4
-      with:
-        name: dist
-        path: dist/
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist
 
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+
+  smoke-macos:
+    name: Smoke install from PyPI (macOS)
+    runs-on: macos-14
+    needs: [publish-pypi]
+    env:
+      PACKAGE_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install from PyPI
+        run: |
+          python -m pip install --upgrade pip
+          for i in {1..12}; do
+            python -m pip install "demucs-mlx==${PACKAGE_VERSION}" && break
+            if [ "$i" -eq 12 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Smoke test
+        run: |
+          python -c "
+          from demucs_mlx import Separator, list_models, save_audio
+          models = list_models()
+          print('Models:', models)
+          assert 'htdemucs' in models['single']
+          import demucs_mlx
+          print(f'demucs-mlx {demucs_mlx.__version__} smoke test passed')
+          " 2>&1 | head -20
