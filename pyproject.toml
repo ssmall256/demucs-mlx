@@ -16,17 +16,11 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "einops",
-  "dora-search",
-  "julius>=0.2.3",
   "mlx>=0.30.3",
   "mlx-audio-io",
   "mlx-spectro",
   "numpy",
-  "omegaconf",
   "packaging",
-  "openunmix",
-  "pyyaml",
   "tqdm",
 ]
 
@@ -81,4 +75,4 @@ version = {attr = "demucs_mlx.__version__"}
 include = ["demucs_mlx*"]
 
 [tool.setuptools.package-data]
-demucs_mlx = ["py.typed", "remote/*.txt", "remote/*.yaml"]
+demucs_mlx = ["remote/*.txt", "remote/*.yaml"]
