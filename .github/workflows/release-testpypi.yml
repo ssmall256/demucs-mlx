@@ -46,6 +46,7 @@ jobs:
       with:
         repository-url: https://test.pypi.org/legacy/
         attestations: false
+        skip-existing: true
 
   smoke-test:
     needs: publish
