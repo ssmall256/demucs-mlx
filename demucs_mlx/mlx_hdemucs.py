@@ -563,7 +563,6 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
 
     def _spec(self, x: mx.array) -> mx.array:
         hl = self.hop_length
-        nfft = self.nfft
         if self.hybrid:
             le = int(math.ceil(x.shape[-1] / hl))
             pad = hl // 2 * 3
