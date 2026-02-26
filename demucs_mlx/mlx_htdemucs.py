@@ -13,7 +13,7 @@ from .mlx_hdemucs import HDecLayer, HEncLayer, MultiWrap, ScaledEmbedding, pad1d
 from .mlx_layers import Conv1dNCL
 from .mlx_transformer import CrossTransformerEncoder
 from .mlx_utils import MLXStateDictMixin, center_trim
-from .spec_mlx import ispectro, spectro
+from .spec_mlx import CachedSpectralPair
 from .wiener_mlx import wiener
 
 
@@ -167,6 +167,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
 
         self.nfft = nfft
         self.hop_length = nfft // 4
+        self._spectral = CachedSpectralPair(n_fft=nfft, hop_length=nfft // 4)
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
@@ -321,8 +322,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         le = int(math.ceil(x.shape[-1] / hl))
         pad = hl // 2 * 3
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
-        # FIX: Updated to use keyword arguments for new spec_mlx
-        z = spectro(x, n_fft=nfft, hop_length=hl)[..., :-1, :]
+        z = self._spectral.stft(x)[..., :-1, :]
         z = z[..., 2: 2 + le]
         return z
 
@@ -335,8 +335,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             z = mx.pad(z, [(0, 0), (0, 0), (0, 1), (2, 2)])
         pad = hl // 2 * 3
         le = hl * int(math.ceil(length / hl)) + 2 * pad
-        # FIX: Updated to use keyword arguments for new spec_mlx
-        x = ispectro(z, n_fft=self.nfft, hop_length=hl, length=le)
+        x = self._spectral.istft(z, length=le)
         x = x[..., pad: pad + length]
         return x
 

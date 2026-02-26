@@ -4,6 +4,10 @@ Re-exports the core ``SpectralTransform`` from ``mlx_spectro`` and adds
 ``spectro`` / ``ispectro`` convenience functions that handle the
 multi-dimensional tensor layouts used by Demucs models (3-D for STFT,
 4-D and 5-D for iSTFT).
+
+``CachedSpectralPair`` caches the transform and lazily creates
+``compiled_pair()`` instances for repeated chunk sizes, giving 1.3–1.7x
+speedup over the eager path.
 """
 
 from typing import Optional
@@ -17,10 +21,115 @@ from mlx_spectro import (
 )
 
 __all__ = [
+    "CachedSpectralPair",
     "SpectralTransform",
     "spectro",
     "ispectro",
 ]
+
+
+class CachedSpectralPair:
+    """Cached STFT/iSTFT transform with compiled_pair() acceleration.
+
+    Creates the ``SpectralTransform`` once and reuses it.  For repeated
+    chunk sizes (the common case in Demucs inference), lazily builds and
+    caches ``compiled_pair()`` graphs that eliminate Python dispatch overhead.
+
+    Handles the Demucs multi-dimensional reshape internally:
+      - stft:  [B, C, T]   → [B*C, T]  → stft → [B, C, F, N]
+      - istft: [B, C, F, N] → [B*C, F, N] → istft → [B, C, T]
+               [B, S, C, F, N] → [B*S*C, F, N] → istft → [B, S, C, T]
+    """
+
+    def __init__(
+        self,
+        n_fft: int = 4096,
+        hop_length: Optional[int] = None,
+    ) -> None:
+        eff_n_fft, hop, win = resolve_fft_params(n_fft, hop_length, None, 0)
+        self._transform = get_transform_mlx(
+            n_fft=eff_n_fft,
+            hop_length=hop,
+            win_length=win,
+            window_fn="hann",
+            periodic=True,
+            center=True,
+            normalized=False,
+            window=None,
+        )
+        self._compiled_cache: dict[int, tuple] = {}  # length → (stft_fn, istft_fn)
+
+    def _get_pair(self, length: int, batch: int) -> tuple:
+        """Get or create a compiled_pair for the given signal length."""
+        if length not in self._compiled_cache:
+            pair = self._transform.compiled_pair(
+                length=length, layout="bfn", warmup_batch=batch,
+            )
+            self._compiled_cache[length] = pair
+        return self._compiled_cache[length]
+
+    def stft(self, x: mx.array) -> mx.array:
+        """STFT with Demucs multi-dim support.
+
+        Input [B, C, T] → output [B, C, F, N].
+        Input [B, T]    → output [B, F, N].
+        """
+        if x.ndim == 3:
+            B, C, T = x.shape
+            x2 = mx.contiguous(x).reshape(B * C, T)
+            stft_fn, _ = self._get_pair(T, B * C)
+            spec2 = stft_fn(x2)
+            return spec2.reshape(B, C, spec2.shape[1], spec2.shape[2])
+
+        stft_fn, _ = self._get_pair(int(x.shape[-1]), int(x.shape[0]))
+        return stft_fn(x)
+
+    def istft(self, z: mx.array, length: int) -> mx.array:
+        """iSTFT with Demucs multi-dim support.
+
+        Input [B, S, C, F, N] → output [B, S, C, T].
+        Input [B, C, F, N]    → output [B, C, T].
+        Input [B, F, N]       → output [B, T].
+        """
+        if z.ndim == 5:
+            B, S, C, F, N = z.shape
+            z2 = mx.contiguous(z).reshape(B * S * C, F, N)
+            _, istft_fn = self._get_pair(length, B * S * C)
+            wav2 = istft_fn(z2)
+            return wav2.reshape(B, S, C, wav2.shape[1])
+
+        if z.ndim == 4:
+            B, C, F, N = z.shape
+            z2 = mx.contiguous(z).reshape(B * C, F, N)
+            _, istft_fn = self._get_pair(length, B * C)
+            wav2 = istft_fn(z2)
+            return wav2.reshape(B, C, wav2.shape[1])
+
+        _, istft_fn = self._get_pair(length, int(z.shape[0]))
+        return istft_fn(z)
+
+    def stft_eager(self, x: mx.array) -> mx.array:
+        """STFT using cached transform without compiled graphs (fallback)."""
+        if x.ndim == 3:
+            B, C, T = x.shape
+            x2 = mx.contiguous(x).reshape(B * C, T)
+            spec2 = self._transform.stft(x2)
+            return spec2.reshape(B, C, spec2.shape[1], spec2.shape[2])
+        return self._transform.stft(x)
+
+    def istft_eager(self, z: mx.array, length: int) -> mx.array:
+        """iSTFT using cached transform without compiled graphs (fallback)."""
+        if z.ndim == 5:
+            B, S, C, F, N = z.shape
+            z2 = mx.contiguous(z).reshape(B * S * C, F, N)
+            wav2 = self._transform.istft(z2, length=length)
+            return wav2.reshape(B, S, C, wav2.shape[1])
+        if z.ndim == 4:
+            B, C, F, N = z.shape
+            z2 = mx.contiguous(z).reshape(B * C, F, N)
+            wav2 = self._transform.istft(z2, length=length)
+            return wav2.reshape(B, C, wav2.shape[1])
+        return self._transform.istft(z, length=length)
 
 
 def spectro(

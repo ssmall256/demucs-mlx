@@ -25,7 +25,7 @@ from .mlx_layers import (
     Identity,
 )
 from .mlx_utils import MLXStateDictMixin
-from .spec_mlx import ispectro, spectro
+from .spec_mlx import CachedSpectralPair
 from .wiener_mlx import wiener
 
 
@@ -441,6 +441,7 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
 
         self.nfft = nfft
         self.hop_length = nfft // 4
+        self._spectral = CachedSpectralPair(n_fft=nfft, hop_length=nfft // 4)
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
@@ -571,8 +572,7 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
             else:
                 x = pad1d(x, (pad, pad + le * hl - x.shape[-1]))
         
-        # FIX: Added keywords for spec_mlx
-        z = spectro(x, n_fft=nfft, hop_length=hl)[..., :-1, :]
+        z = self._spectral.stft(x)[..., :-1, :]
         
         if self.hybrid:
             z = z[..., 2:2 + le]
@@ -596,16 +596,14 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
             else:
                 le = hl * int(math.ceil(length / hl))
             
-            # FIX: Added keywords for spec_mlx
-            x = ispectro(z, n_fft=self.nfft, hop_length=hl, length=le)
-            
+            x = self._spectral.istft(z, length=le)
+
             if not self.hybrid_old:
                 x = x[..., pad:pad + length]
             else:
                 x = x[..., :length]
         else:
-            # FIX: Added keywords for spec_mlx
-            x = ispectro(z, n_fft=self.nfft, hop_length=hl, length=length)
+            x = self._spectral.istft(z, length=length)
         return x
 
     def _magnitude(self, z: mx.array) -> mx.array:
