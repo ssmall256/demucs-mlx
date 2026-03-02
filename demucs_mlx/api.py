@@ -16,6 +16,7 @@ class Separator:
         overlap: float = 0.25,
         split: bool = True,
         segment: tp.Optional[float] = None,
+        seed: tp.Optional[int] = None,
         jobs: int = 0,
         progress: bool = False,
         batch_size: int = 8,
@@ -39,11 +40,17 @@ class Separator:
             raise ValueError("segment must be > 0 when provided.")
         if int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
+        if seed is not None:
+            try:
+                seed = int(seed)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("seed must be an integer or None.") from exc
         self.model_name = model
         self.shifts = int(shifts)
         self.overlap = float(overlap)
         self.split = split
         self.segment = float(segment) if segment is not None else None
+        self.seed = seed
         self.batch_size = int(batch_size)
         self.jobs = jobs
         self.progress = progress
@@ -74,6 +81,7 @@ class Separator:
         overlap: tp.Optional[float] = None,
         split: tp.Optional[bool] = None,
         segment: tp.Optional[float] = None,
+        seed: tp.Optional[int] = None,
         progress: tp.Optional[bool] = None,
     ) -> None:
         if shifts is not None:
@@ -92,6 +100,11 @@ class Separator:
             if seg_f <= 0:
                 raise ValueError("segment must be > 0 when provided.")
             self.segment = seg_f
+        if seed is not None:
+            try:
+                self.seed = int(seed)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("seed must be an integer or None.") from exc
         if progress is not None:
             self.progress = progress
 
@@ -160,6 +173,7 @@ class Separator:
             segment=self.segment,
             progress=self.progress,
             batch_size=self.batch_size,
+            seed=self.seed,
         )
         mx.eval(estimates)
         stems_mx = estimates[0]

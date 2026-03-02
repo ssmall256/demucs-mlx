@@ -73,11 +73,19 @@ def apply_model(
     num_workers: int = 0,
     segment: tp.Optional[float] = None,
     batch_size: int = 8,
+    seed: tp.Optional[int] = None,
+    _rng: tp.Optional[random.Random] = None,
 ):
     progress_enabled = bool(progress)
     if num_workers > 0:
         warnings.warn("num_workers > 0 ignored on MLX.", RuntimeWarning)
         num_workers = 0
+
+    rng: tp.Any
+    if _rng is None:
+        rng = random if seed is None else random.Random(int(seed))
+    else:
+        rng = _rng
 
     # --- BagOfModels Handling ---
     from .mlx_convert import BagOfModelsMLX
@@ -89,7 +97,7 @@ def apply_model(
         for sub_model, model_weights in zip(model.models, model.weights):
             res = apply_model(
                 sub_model, mix, shifts, split, overlap, transition_power,
-                progress, num_workers, segment, batch_size
+                progress, num_workers, segment, batch_size, seed=seed, _rng=rng
             )
             out = mx.array(res)
 
@@ -119,20 +127,21 @@ def apply_model(
         return estimates
 
     # --- Standard Inference ---
-    mix_array = mix.tensor if hasattr(mix, "tensor") else mix
-    batch, channels, length = mix_array.shape
+    mix_chunk = tensor_chunk(mix)
+    batch, channels, length = mix_chunk.shape
+    mix_dtype = mix_chunk.tensor.dtype
 
     if shifts:
         max_shift = int(0.5 * model.samplerate)
-        mix_chunk = TensorChunk(mix_array)
         padded_mix = mix_chunk.padded(length + 2 * max_shift)
+        padded_chunk = TensorChunk(padded_mix)
         out = 0.0
         for _ in range(shifts):
-            offset = random.randint(0, max_shift)
-            shifted = TensorChunk(padded_mix, offset, length + max_shift - offset)
+            offset = rng.randint(0, max_shift)
+            shifted = TensorChunk(padded_chunk, offset, length + max_shift - offset)
             shifted_out = apply_model(
                 model, shifted, 0, split, overlap, transition_power,
-                False, num_workers, segment, batch_size
+                False, num_workers, segment, batch_size, seed=seed, _rng=rng
             )
             out = out + shifted_out[..., max_shift - offset:]
         out = out / shifts
@@ -140,8 +149,8 @@ def apply_model(
         return out
 
     if split:
-        out = mx.zeros((batch, len(model.sources), channels, length), dtype=mix_array.dtype)
-        sum_weight = mx.zeros((length,), dtype=mix_array.dtype)
+        out = mx.zeros((batch, len(model.sources), channels, length), dtype=mix_dtype)
+        sum_weight = mx.zeros((length,), dtype=mix_dtype)
 
         if segment is None:
             segment = model.segment
@@ -150,7 +159,7 @@ def apply_model(
         offsets = list(range(0, length, stride))
 
         # Prepare Weight
-        cache_key = (segment_length, float(transition_power), mix_array.dtype)
+        cache_key = (segment_length, float(transition_power), mix_dtype)
         weight = _WEIGHT_CACHE.get(cache_key)
         if weight is None:
             weight = mx.concatenate([
@@ -211,7 +220,7 @@ def apply_model(
         try:
             for i, offset in enumerate(offsets):
                 this_chunk_len = min(segment_length, length - offset)
-                chunk = TensorChunk(mix_array, offset, this_chunk_len)
+                chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
 
                 # Batch only standard-sized chunks
                 if this_chunk_len == segment_length:
@@ -258,7 +267,6 @@ def apply_model(
 
     # No split path
     valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length
-    mix_chunk = TensorChunk(mix_array)
     padded_mix = mix_chunk.padded(valid_length)
     out = model(padded_mix)
     return center_trim(out, length)

@@ -44,6 +44,9 @@ jobs:
     - name: Run kernel tests
       run: uv run python tests/test_metal_kernels.py
 
+    - name: Run apply_model chunk/seed regression
+      run: uv run python tests/test_apply_model_chunk_seed.py
+
     - name: Test CLI
       run: uv run demucs-mlx --list-models
 
