@@ -23,6 +23,7 @@ for name, audio in stems.items():
 
 - **model** (`str`): Model name. Default `"htdemucs"`. See `list_models()` for options.
 - **shifts** (`int`): Random time shifts for equivariance averaging. Default `1`. Set to `0` to disable.
+- **seed** (`int | None`): Optional RNG seed for reproducible shift sampling. Default `None` (stochastic).
 - **overlap** (`float`): Overlap ratio between segments. Default `0.25`. Must be in `[0, 1)`.
 - **split** (`bool`): Whether to split audio into segments. Default `True`.
 - **segment** (`float | None`): Segment length in seconds. Default `None` (uses model default).
@@ -37,7 +38,7 @@ for name, audio in stems.items():
 
 ### `update_parameter(**kwargs)`
 
-Update separation parameters after initialization. Accepts the same keyword arguments as the constructor (except `model`).
+Update separation parameters after initialization. Accepts the same keyword arguments as the constructor (except `model`), including `seed`.
 
 ### `separate_tensor(wav, *, return_mx=False)`
 

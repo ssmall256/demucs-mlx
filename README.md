@@ -45,6 +45,7 @@ Options:
 -n, --name          Model name (default: htdemucs)
 -o, --out           Output directory (default: separated)
 --shifts            Number of random shifts (default: 1)
+--seed              Optional RNG seed for reproducible shifts (default: none)
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: 8)
 --write-workers     Concurrent writer threads (default: 1)
@@ -70,6 +71,19 @@ To keep outputs as MLX arrays (avoids GPU-to-CPU copy):
 ```python
 origin, stems = separator.separate_audio_file("song.wav", return_mx=True)
 ```
+
+For reproducible shift sampling (while keeping `shifts=1` behavior), pass a seed:
+
+```python
+separator = Separator(model="htdemucs", shifts=1, seed=0)
+origin, stems = separator.separate_audio_file("song.wav")
+```
+
+## What changed in 1.4.0
+
+- Fixed shifted-inference `TensorChunk` propagation so chunk length/offset is handled correctly in all paths.
+- Added optional deterministic RNG control (`seed`) for Python API and CLI.
+- Default behavior is unchanged: `shifts=1` remains stochastic unless `seed` is provided.
 
 ## Performance
 
