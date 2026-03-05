@@ -126,6 +126,11 @@ def fused_glu(x: mx.array, axis: int = 1) -> mx.array:
     return result
 
 
+# Threshold: when elems_per_group exceeds this, use pure MLX ops
+# instead of the single-threadgroup Metal kernel (which underutilizes the GPU).
+_HYBRID_THRESHOLD = 32768
+
+
 # ==============================================================================
 # Fused GroupNorm + GELU (erf-based, matching MLX's nn.gelu exactly)
 # ==============================================================================
@@ -242,6 +247,7 @@ def _get_groupnorm_gelu_kernel():
     return _groupnorm_gelu_kernel
 
 
+@mx.compile
 def _groupnorm_gelu_fallback(
     x: mx.array, weight: mx.array, bias: mx.array,
     num_groups: int, eps: float = 1e-5,
@@ -286,6 +292,12 @@ def fused_groupnorm_gelu(
     if C % num_groups != 0:
         raise ValueError(f"channels {C} not divisible by num_groups {num_groups}")
     channels_per_group = C // num_groups
+    elems_per_group = channels_per_group * spatial_size
+
+    # For large groups (few threadgroups), use pure MLX ops which parallelize
+    # better than the single-threadgroup Metal kernel.
+    if elems_per_group > _HYBRID_THRESHOLD:
+        return _groupnorm_gelu_fallback(x, weight, bias, num_groups, eps)
 
     x_contig = mx.contiguous(x.reshape(B, C, spatial_size))
     weight = mx.contiguous(weight.astype(mx.float32))
@@ -294,7 +306,6 @@ def fused_groupnorm_gelu(
     params = mx.array([num_groups, channels_per_group, spatial_size, C], dtype=mx.int32)
 
     total_groups = B * num_groups
-    elems_per_group = channels_per_group * spatial_size
     tg = min(1024, max(32, ((elems_per_group + 31) // 32) * 32))
 
     result = _get_groupnorm_gelu_kernel()(
@@ -446,6 +457,26 @@ def _get_groupnorm_glu_kernel():
     return _groupnorm_glu_kernel
 
 
+@mx.compile
+def _groupnorm_glu_fallback(
+    x: mx.array, weight: mx.array, bias: mx.array,
+    num_groups: int, eps: float = 1e-5,
+) -> mx.array:
+    """Pure-MLX GroupNorm + GLU (no Metal required)."""
+    B, C_full = x.shape[0], x.shape[1]
+    cpg = C_full // num_groups
+    x_r = x.reshape(B, num_groups, cpg, *x.shape[2:])
+    axes = tuple(range(2, x_r.ndim))
+    mean = x_r.mean(axis=axes, keepdims=True)
+    var = mx.var(x_r, axis=axes, keepdims=True)
+    x_norm = (x_r - mean) * mx.rsqrt(var + eps)
+    x_out = x_norm.reshape(x.shape)
+    w_shape = [1, C_full] + [1] * (x.ndim - 2)
+    normed = x_out * weight.reshape(w_shape) + bias.reshape(w_shape)
+    a, b = mx.split(normed, 2, axis=1)
+    return a * mx.sigmoid(b)
+
+
 def fused_groupnorm_glu(
     x: mx.array,
     weight: mx.array,
@@ -483,20 +514,14 @@ def fused_groupnorm_glu(
         raise ValueError(f"channels {C_full} must be even for GLU")
     channels_per_group = C_full // num_groups
 
-    if not HAS_METAL or num_groups > 1:
-        # Pure-MLX fallback: separate GroupNorm + GLU.
-        # Also used when num_groups > 1 because the GLU split crosses group
-        # boundaries, which can't be handled in a single kernel dispatch.
-        x_r = x.reshape(B, num_groups, channels_per_group, *x.shape[2:])
-        axes = tuple(range(2, x_r.ndim))
-        mean = x_r.mean(axis=axes, keepdims=True)
-        var = mx.var(x_r, axis=axes, keepdims=True)
-        x_norm = (x_r - mean) * mx.rsqrt(var + eps)
-        x_out = x_norm.reshape(x.shape)
-        w_shape = [1, C_full] + [1] * (x.ndim - 2)
-        normed = x_out * weight.reshape(w_shape) + bias.reshape(w_shape)
-        a, b = mx.split(normed, 2, axis=1)
-        return a * mx.sigmoid(b)
+    elems_per_group = channels_per_group * spatial_size
+
+    # Pure-MLX fallback for cases where the Metal kernel underperforms:
+    # - No Metal available
+    # - Large groups (few threadgroups -> GPU underutilization)
+    # - num_groups > 1 (GLU split crosses group boundaries)
+    if not HAS_METAL or num_groups > 1 or elems_per_group > _HYBRID_THRESHOLD:
+        return _groupnorm_glu_fallback(x, weight, bias, num_groups, eps)
 
     x_contig = mx.contiguous(x.reshape(B, C_full, spatial_size))
     weight = mx.contiguous(weight.astype(mx.float32))
@@ -507,7 +532,6 @@ def fused_groupnorm_glu(
     )
 
     total_groups = B * num_groups
-    elems_per_group = channels_per_group * spatial_size
     tg = min(1024, max(32, ((elems_per_group + 31) // 32) * 32))
 
     out_shape = list(orig_shape)
