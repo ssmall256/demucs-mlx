@@ -12,7 +12,6 @@ import mlx.nn as nn
 
 from .mlx_demucs import DConv
 from .mlx_layers import (
-    GELUNCL,
     GLUNCL,
     Conv1dNCL,
     Conv2dNCHW,
@@ -171,7 +170,7 @@ class HEncLayer(nn.Module):
         if self._fused_norm1:
             y = self.norm1(y)
         else:
-            y = GELUNCL()(self.norm1(y))
+            y = nn.gelu(self.norm1(y))
         if self.dconv:
             if self.freq:
                 B, C, Fr, T = y.shape
@@ -284,7 +283,7 @@ class HDecLayer(nn.Module):
         else:
             z = z[..., self.pad:self.pad + length]
         if not self.last:
-            z = GELUNCL()(z)
+            z = nn.gelu(z)
         return z, y
 
 
@@ -345,7 +344,7 @@ class MultiWrap(nn.Module):
                 start = limit
         out = mx.concatenate(outs, axis=2)
         if not self.conv and not last:
-            out = GELUNCL()(out)
+            out = nn.gelu(out)
         if self.conv:
             return out
         return out, None

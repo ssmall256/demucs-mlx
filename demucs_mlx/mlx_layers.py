@@ -204,11 +204,11 @@ class GroupNormNCL(nn.Module):
         # L is the last dim (contiguous), so this reduction is fast.
         axes = tuple(range(2, x_reshaped.ndim))
         mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = ((x_reshaped - mean) ** 2).mean(axis=axes, keepdims=True)
-        
+        var = mx.var(x_reshaped, axis=axes, keepdims=True)
+
         # Normalize
         x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
-        
+
         # Restore (N, C, L)
         x_out = x_norm.reshape(x.shape)
         
@@ -246,15 +246,15 @@ class GroupNormNCHW(nn.Module):
         
         axes = tuple(range(2, x_reshaped.ndim))
         mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = ((x_reshaped - mean) ** 2).mean(axis=axes, keepdims=True)
-        
+        var = mx.var(x_reshaped, axis=axes, keepdims=True)
+
         x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
         x_out = x_norm.reshape(x.shape)
-        
+
         if self.affine:
             shape = [1, C] + [1] * (x_out.ndim - 2)
             x_out = x_out * self.weight.reshape(shape) + self.bias.reshape(shape)
-            
+
         return x_out
 
 
