@@ -211,11 +211,11 @@ class GroupNorm(nn.Module):
         # Reshape to (B, G, C//G, ...)
         x_reshaped = x.reshape(B, G, C // G, *x.shape[2:])
         
-        # Calculate stats
+        # Calculate stats (single-pass variance is faster)
         axes = tuple(range(2, x_reshaped.ndim))
         mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = ((x_reshaped - mean) ** 2).mean(axis=axes, keepdims=True)
-        
+        var = mx.var(x_reshaped, axis=axes, keepdims=True)
+
         # Normalize
         x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
         
