@@ -80,6 +80,11 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
+## What changed in 1.4.3
+
+- `resample_mx()` now uses direct `mac.resample()` instead of writing/reading a temp file — eliminates an unnecessary MLX→numpy→disk→MLX round-trip.
+- Bumped minimum `mlx-audio-io` to `>=1.3.9` (auto-selects best resampling quality).
+
 ## What changed in 1.4.2
 
 - Audio loading now stays as native MLX arrays end-to-end (no numpy round-trip).
