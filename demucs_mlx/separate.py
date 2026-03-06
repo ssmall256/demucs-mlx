@@ -90,12 +90,7 @@ def _load_audio(path: Path, model):
     import mlx.core as mx
     import mlx_audio_io as mac
 
-    # mlx_audio_io.load returns (mx.array, sample_rate) in shape [frames, channels]
-    audio_mx, sr = mac.load(str(path), dtype="float32")
-    if sr != model.samplerate:
-        quality = 'soxr_vhq' if mac.supports_soxr() else 'best'
-        audio_mx = mac.resample(audio_mx, sr, model.samplerate, quality=quality)
-    # Transpose to (channels, frames)
+    audio_mx, sr = mac.load(str(path), sr=model.samplerate, dtype="float32")
     wav = audio_mx.T
     src_channels = wav.shape[0]
     tgt_channels = model.audio_channels
