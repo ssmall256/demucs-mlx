@@ -16,9 +16,9 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "mlx>=0.30.3",
-  "mlx-audio-io",
-  "mlx-spectro>=0.2.2",
+  "mlx>=0.31.0",
+  "mlx-audio-io>=1.3.8",
+  "mlx-spectro>=0.2.4",
   "numpy",
   "packaging",
   "tqdm",
