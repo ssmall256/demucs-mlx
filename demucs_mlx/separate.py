@@ -87,24 +87,23 @@ def _list_models() -> int:
 
 
 def _load_audio(path: Path, model):
+    import mlx.core as mx
     import mlx_audio_io as mac
 
     # mlx_audio_io.load returns (mx.array, sample_rate) in shape [frames, channels]
     audio_mx, sr = mac.load(str(path), dtype="float32")
     if sr != model.samplerate:
-        raise ValueError(
-            f"Input sample rate {sr} does not match model sample rate {model.samplerate}. "
-            "Resampling is currently not supported without torch."
-        )
-    # Convert to numpy and transpose to (channels, frames)
-    wav = np.array(audio_mx, copy=False).T
+        quality = 'soxr_vhq' if mac.supports_soxr() else 'best'
+        audio_mx = mac.resample(audio_mx, sr, model.samplerate, quality=quality)
+    # Transpose to (channels, frames)
+    wav = audio_mx.T
     src_channels = wav.shape[0]
     tgt_channels = model.audio_channels
     if src_channels != tgt_channels:
         if tgt_channels == 1:
-            wav = wav.mean(axis=0, keepdims=True)
+            wav = mx.mean(wav, axis=0, keepdims=True)
         elif src_channels == 1 and tgt_channels > 1:
-            wav = np.tile(wav, (tgt_channels, 1))
+            wav = mx.broadcast_to(wav, (tgt_channels, wav.shape[1]))
         elif src_channels > tgt_channels:
             wav = wav[:tgt_channels, :]
         else:
@@ -118,7 +117,7 @@ def _iter_prefetched_audio(
     model,
     *,
     prefetch: int,
-) -> tp.Iterator[tuple[Path, np.ndarray]]:
+) -> tp.Iterator[tuple[Path, tp.Any]]:
     if prefetch <= 0:
         for track in tracks:
             path = Path(track)
@@ -163,7 +162,7 @@ def _iter_prefetched_audio(
 
 def _separate_one(
     path: Path,
-    wav: np.ndarray,
+    wav,
     model,
     out_dir: Path,
     shifts: int,
@@ -184,7 +183,7 @@ def _separate_one(
     try:
         if verbose:
             print(f"Loading audio: {path}")
-        mix = mx.array(wav)[None, ...]
+        mix = wav[None, ...]
         if stage is not None:
             stage.update(1)
 
