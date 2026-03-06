@@ -11,6 +11,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
+- Automatic resampling — input files at any sample rate are resampled to the model rate
 - Audio I/O via [mlx-audio-io](https://github.com/ssmall256/mlx-audio-io)
 - STFT/iSTFT via [mlx-spectro](https://github.com/ssmall256/mlx-spectro)
 
@@ -78,6 +79,13 @@ For reproducible shift sampling (while keeping `shifts=1` behavior), pass a seed
 separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
+
+## What changed in 1.4.1
+
+- Audio loading now stays as native MLX arrays end-to-end (no numpy round-trip).
+- Automatic resampling via `mlx-audio-io` — input files no longer need to match the model sample rate.
+- Uses `soxr_vhq` resampling quality when available, with automatic fallback.
+- Bumped minimum dependencies: `mlx>=0.31.0`, `mlx-audio-io>=1.3.8`, `mlx-spectro>=0.2.4`.
 
 ## What changed in 1.4.0
 

@@ -191,16 +191,16 @@ class Separator:
         *,
         return_mx: bool = False,
     ) -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
+        import mlx.core as mx
         import mlx_audio_io as mac
-        import numpy as np
 
         # mlx_audio_io.load returns (mx.array, sample_rate) in shape [frames, channels]
         audio_mx, sr = mac.load(str(path), dtype="float32")
         if sr != self.samplerate:
-            # Resample to model sample rate via mlx-audio-io
-            audio_mx, sr = mac.load(str(path), sr=self.samplerate, dtype="float32")
-        # Convert to numpy and transpose to (channels, frames)
-        wav = np.array(audio_mx, copy=False).T
+            quality = 'soxr_vhq' if mac.supports_soxr() else 'best'
+            audio_mx = mac.resample(audio_mx, sr, self.samplerate, quality=quality)
+        # Transpose to (channels, frames) and keep as MLX
+        wav = mx.transpose(audio_mx, (1, 0))
         return self.separate_tensor(wav, return_mx=return_mx)
 
 
