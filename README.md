@@ -80,7 +80,7 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
-## What changed in 1.4.1
+## What changed in 1.4.2
 
 - Audio loading now stays as native MLX arrays end-to-end (no numpy round-trip).
 - Automatic resampling via `mlx-audio-io` — input files no longer need to match the model sample rate.
