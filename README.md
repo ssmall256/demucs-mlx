@@ -26,13 +26,24 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 pip install demucs-mlx
 ```
 
-On first run, demucs-mlx will automatically download and convert the PyTorch weights to MLX format. This requires the `convert` extra:
+On first run, demucs-mlx loads cached MLX weights if available. If the optional
+`mlx-weights` package is installed locally, demucs-mlx uses its shared cache. Otherwise
+it uses its built-in cache and conversion fallback.
+
+To bootstrap a missing model with the public package, install the conversion extra:
 
 ```bash
 pip install 'demucs-mlx[convert]'
 ```
 
-Once weights are cached in `~/.cache/demucs-mlx`, the `convert` extra is no longer needed.
+If you are developing with `mlx-weights` installed, you can also pre-convert through its
+shared cache:
+
+```bash
+mlx-weights convert demucs/htdemucs
+```
+
+Once weights are cached, the `convert` extra is no longer needed for inference.
 
 ## CLI usage
 
@@ -80,6 +91,11 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
+## What changed in 1.4.4
+
+- Fixed multi-segment `split=True` overlap-add on MLX 0.31.2. Long inputs no longer produce high-amplitude reconstruction spikes.
+- Added regression coverage for split-mode overlap-add and an optional model-level reproduction for issue #1.
+
 ## What changed in 1.4.3
 
 - `resample_mx()` now uses direct `mac.resample()` instead of writing/reading a temp file — eliminates an unnecessary MLX→numpy→disk→MLX round-trip.
@@ -123,7 +139,10 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 
 ## MLX model cache
 
-Pre-converted MLX weights are cached under `~/.cache/demucs-mlx`. Delete to force re-conversion.
+Pre-converted MLX weights are cached under `~/.cache/demucs-mlx` by default. When the
+optional `mlx-weights` package is installed, demucs-mlx uses its shared
+`~/.cache/mlx-weights/demucs-mlx` cache instead. Delete the active cache directory to
+force re-conversion.
 
 ## Documentation
 

@@ -392,10 +392,11 @@ def convert_htdemucs_weights(
 
     torch_model = get_model(model_name)
 
+    torch_models: list[tp.Any]
     if isinstance(torch_model, BagOfModels):
         if verbose:
             print(f"   Found bag with {len(torch_model.models)} models")
-        torch_models = torch_model.models
+        torch_models = list(tp.cast(tp.Any, torch_model.models))
         if hasattr(torch_model, 'weights') and torch_model.weights is not None:
             weights = torch_model.weights
         else:
