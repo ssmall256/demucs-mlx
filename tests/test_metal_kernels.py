@@ -2,13 +2,14 @@
 Numerical parity tests for custom Metal kernels.
 Each test compares custom kernel output against reference MLX implementation.
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 
 import mlx.core as mx
 import mlx.nn as nn
-import math
 
 
 def test_fused_glu():
@@ -50,7 +51,10 @@ def test_fused_glu():
         status = "PASS" if passed else "FAIL"
         if not passed:
             all_passed = False
-        print(f"  {desc:30s} shape={str(shape):20s} axis={axis}  max_diff={max_diff:.2e}  [{status}]")
+        print(
+            f"  {desc:30s} shape={str(shape):20s} axis={axis}  "
+            f"max_diff={max_diff:.2e}  [{status}]"
+        )
 
     print(f"  Result: {'ALL PASSED' if all_passed else 'SOME FAILED'}\n")
     assert all_passed
@@ -59,7 +63,6 @@ def test_fused_glu():
 def test_fused_groupnorm_gelu():
     """Test fused GroupNorm+GELU against separate GroupNorm + nn.gelu reference."""
     from demucs_mlx.metal_kernels import fused_groupnorm_gelu
-    from demucs_mlx.mlx_layers import GroupNormNCL, GroupNormNCHW
 
     print("=== Fused GroupNorm+GELU Kernel ===")
     test_cases = [
@@ -113,8 +116,14 @@ def test_fused_groupnorm_gelu():
             all_passed = False
             # Debug: print more info
             mean_diff = mx.mean(mx.abs(ref - out)).item()
-            print(f"    DEBUG: mean_diff={mean_diff:.2e}, ref_range=[{mx.min(ref).item():.4f}, {mx.max(ref).item():.4f}]")
-        print(f"  {desc:40s} shape={str(shape):20s} G={num_groups}  max_diff={max_diff:.2e}  [{status}]")
+            print(
+                f"    DEBUG: mean_diff={mean_diff:.2e}, "
+                f"ref_range=[{mx.min(ref).item():.4f}, {mx.max(ref).item():.4f}]"
+            )
+        print(
+            f"  {desc:40s} shape={str(shape):20s} G={num_groups}  "
+            f"max_diff={max_diff:.2e}  [{status}]"
+        )
 
     print(f"  Result: {'ALL PASSED' if all_passed else 'SOME FAILED'}\n")
     assert all_passed
@@ -211,7 +220,10 @@ def test_fused_groupnorm_glu():
         status = "PASS" if passed else "FAIL"
         if not passed:
             all_passed = False
-        print(f"  {desc:35s} shape={str(shape):20s} G={num_groups}  max_diff={max_diff:.2e}  [{status}]")
+        print(
+            f"  {desc:35s} shape={str(shape):20s} G={num_groups}  "
+            f"max_diff={max_diff:.2e}  [{status}]"
+        )
 
     print(f"  Result: {'ALL PASSED' if all_passed else 'SOME FAILED'}\n")
     assert all_passed
@@ -219,7 +231,7 @@ def test_fused_groupnorm_glu():
 
 def test_transformer_norm_fix():
     """Verify the norm1 caching fix doesn't change outputs."""
-    from demucs_mlx.mlx_transformer import TransformerEncoderLayer, CrossTransformerEncoderLayer
+    from demucs_mlx.mlx_transformer import CrossTransformerEncoderLayer, TransformerEncoderLayer
 
     print("=== Transformer Norm Fix (Functional Equivalence) ===")
 
@@ -244,7 +256,10 @@ def test_transformer_norm_fix():
     # Run forward pass
     out = layer(x)
     mx.eval(out)
-    print(f"  TransformerEncoderLayer: output shape={out.shape}, mean={mx.mean(out).item():.6f}  [OK]")
+    print(
+        f"  TransformerEncoderLayer: output shape={out.shape}, "
+        f"mean={mx.mean(out).item():.6f}  [OK]"
+    )
 
     # Test cross-attention layer
     cross_layer = CrossTransformerEncoderLayer(
@@ -264,7 +279,10 @@ def test_transformer_norm_fix():
 
     out = cross_layer(q, k)
     mx.eval(out)
-    print(f"  CrossTransformerEncoderLayer: output shape={out.shape}, mean={mx.mean(out).item():.6f}  [OK]")
+    print(
+        f"  CrossTransformerEncoderLayer: output shape={out.shape}, "
+        f"mean={mx.mean(out).item():.6f}  [OK]"
+    )
     print()
 
 
