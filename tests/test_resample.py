@@ -9,7 +9,12 @@ import mlx_audio_io as mac
 import numpy as np
 
 
-def _make_sine_wav(sr: int, duration: float = 1.0, freq: float = 440.0, channels: int = 2) -> mx.array:
+def _make_sine_wav(
+    sr: int,
+    duration: float = 1.0,
+    freq: float = 440.0,
+    channels: int = 2,
+) -> mx.array:
     """Generate a sine wave as (frames, channels) MLX array."""
     t = mx.arange(int(sr * duration), dtype=mx.float32) / sr
     mono = 0.5 * mx.sin(2 * np.pi * freq * t)

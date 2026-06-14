@@ -1,7 +1,10 @@
 """End-to-end benchmark for demucs-mlx separation."""
 import time
+
 import mlx.core as mx
+
 from demucs_mlx.api import Separator
+
 
 def bench(duration_s=10, warmup=2, iters=5):
     sep = Separator(model="htdemucs", segment=7.8)

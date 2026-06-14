@@ -7,8 +7,8 @@ HTDemucs / HDemucs / Demucs inference. Reports speedup factors.
 Usage:
     python tests/bench_metal_kernels.py
 """
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

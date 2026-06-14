@@ -8,10 +8,13 @@ import typing as tp
 import warnings
 
 import mlx.core as mx
+from packaging import version
 
 from .mlx_utils import center_trim
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
+# MLX 0.31.2 corrupts strided scatter-add slices in this overlap-add path.
+_USE_SAFE_SLICE_ACCUMULATION = version.parse(mx.__version__) >= version.parse("0.31.2")
 
 
 class TensorChunk:
@@ -201,17 +204,30 @@ def apply_model(
             _, sources, out_c, out_t = batch_out_flat.shape
             batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
 
-            for i, idx in enumerate(batch_indices):
-                chunk_out = center_trim(batch_out[i], segment_length)
+            if _USE_SAFE_SLICE_ACCUMULATION:
+                for i, idx in enumerate(batch_indices):
+                    chunk_out = center_trim(batch_out[i], segment_length)
 
-                offset = offsets[idx]
-                end = offset + segment_length
+                    offset = offsets[idx]
+                    end = offset + segment_length
+                    update = weight.reshape(1, 1, 1, -1) * chunk_out
+                    out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
+                    sum_weight[offset:end] = sum_weight[offset:end] + weight
 
-                out = out.at[:, :, :, offset:end].add(weight.reshape(1, 1, 1, -1) * chunk_out)
-                sum_weight = sum_weight.at[offset:end].add(weight)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+            else:
+                for i, idx in enumerate(batch_indices):
+                    chunk_out = center_trim(batch_out[i], segment_length)
 
-                if progress_bar is not None:
-                    progress_bar.update(1)
+                    offset = offsets[idx]
+                    end = offset + segment_length
+
+                    out = out.at[:, :, :, offset:end].add(weight.reshape(1, 1, 1, -1) * chunk_out)
+                    sum_weight = sum_weight.at[offset:end].add(weight)
+
+                    if progress_bar is not None:
+                        progress_bar.update(1)
 
             mx.eval(out, sum_weight)
             batch_inputs = []
@@ -247,8 +263,13 @@ def apply_model(
 
                     end = offset + this_chunk_len
                     w = weight[:this_chunk_len].reshape(1, 1, 1, -1)
-                    out = out.at[:, :, :, offset:end].add(w * chunk_out)
-                    sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
+                    if _USE_SAFE_SLICE_ACCUMULATION:
+                        update = w * chunk_out
+                        out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
+                        sum_weight[offset:end] = sum_weight[offset:end] + weight[:this_chunk_len]
+                    else:
+                        out = out.at[:, :, :, offset:end].add(w * chunk_out)
+                        sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
                     mx.eval(out, sum_weight)  # Eval to bound graph size
                     if progress_bar is not None:
                         progress_bar.update(1)
