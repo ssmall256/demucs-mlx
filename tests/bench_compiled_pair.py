@@ -13,15 +13,16 @@ Usage:
     python tests/bench_compiled_pair.py
 """
 
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mlx.core as mx
 from mlx_spectro import get_transform_mlx, resolve_fft_params
-from demucs_mlx.spec_mlx import CachedSpectralPair, spectro, ispectro
+
+from demucs_mlx.spec_mlx import CachedSpectralPair, ispectro, spectro
 
 N_FFT = 4096
 HOP_LENGTH = 1024

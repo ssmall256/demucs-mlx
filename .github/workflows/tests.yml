@@ -22,7 +22,7 @@ jobs:
       run: uv sync --extra dev
 
     - name: Lint
-      run: uv run ruff check demucs_mlx
+      run: uv run ruff check demucs_mlx tests
 
     - name: Type check
       run: uv run pyright
@@ -46,6 +46,12 @@ jobs:
 
     - name: Run apply_model chunk/seed regression
       run: uv run python tests/test_apply_model_chunk_seed.py
+
+    - name: Run optional mlx-weights integration regression
+      run: uv run python tests/test_model_converter_optional_mlx_weights.py
+
+    - name: Run apply_model overlap-add regression
+      run: uv run python tests/test_apply_model_overlap_add.py
 
     - name: Test CLI
       run: uv run demucs-mlx --list-models
