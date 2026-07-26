@@ -126,12 +126,20 @@ def _iter_prefetched_audio(
     paths = [Path(track) for track in tracks]
 
     def _producer() -> None:
+        import mlx.core as mx
+
         try:
             for path in paths:
                 if done.is_set():
                     break
                 try:
                     wav = _load_audio(path, model)
+                    # Materialize on this thread: lazy arrays would otherwise
+                    # be evaluated on the consumer thread, which cannot see
+                    # this thread's default stream ("There is no Stream(gpu, N)
+                    # in current thread"). Eager decode is also the point of
+                    # prefetching.
+                    mx.eval(wav)
                 except BaseException as exc:
                     q.put((path, None, exc))
                     break
