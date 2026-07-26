@@ -809,9 +809,11 @@ def load_mlx_model_from_safetensors(
     # Reconstruct model(s)
     model_class_name = config['model_class']
     args = tuple(config['args']) if config['args'] else ()
-    kwargs = config['kwargs']
+    kwargs = _coerce_json_kwargs(config['kwargs'])
     per_model_args = config.get('per_model_args')
     per_model_kwargs = config.get('per_model_kwargs')
+    if per_model_kwargs is not None:
+        per_model_kwargs = [_coerce_json_kwargs(k) for k in per_model_kwargs]
     per_model_class = config.get('per_model_class')
     num_models = config['num_models']
     bag_weights = config.get('weights')
@@ -952,8 +954,42 @@ def _model_root_dir() -> Path:
     return here.parents[4]
 
 
+def _coerce_json_kwargs(kwargs):
+    """Undo JSON stringification of non-JSON config values.
+
+    Checkpoint configs serialized through JSON turn Fraction values (e.g.
+    HTDemucs ``segment=Fraction(39, 5)``) into strings like ``"39/5"``, which
+    later crash ``int(model.samplerate * segment)`` via string repetition.
+    """
+    from fractions import Fraction
+
+    if not isinstance(kwargs, dict):
+        return kwargs
+    out = dict(kwargs)
+    seg = out.get('segment')
+    if isinstance(seg, str):
+        try:
+            out['segment'] = Fraction(seg)
+        except (ValueError, ZeroDivisionError):
+            pass
+    return out
+
+
 def _load_weights_into_model(model, flat_weights: tp.Dict[str, mx.array]):
     """Load flat weights into MLX model state (handles MLX conv wrappers)."""
+    import mlx.utils as _mu
+
+    # Fast path: checkpoints whose keys are canonical full tree paths
+    # (e.g. encoder.0.conv.conv.weight, as written by export_from_pytorch.py).
+    # The walker below expects the legacy collapsed-conv naming
+    # (encoder.0.conv.weight) and silently skips keys it cannot place, which
+    # leaves those layers at random init and produces near-silent noise.
+    canonical = dict(_mu.tree_flatten(model.parameters()))
+    if flat_weights and all(k in canonical for k in flat_weights):
+        model.update(_mu.tree_unflatten(list(flat_weights.items())))
+        return
+
+    applied = set()
     model_state = model.state_dict()
 
     def copy_weights_from_flat(model_dict, flat_dict, prefix="", inside_sequential=False):
@@ -995,6 +1031,7 @@ def _load_weights_into_model(model, flat_weights: tp.Dict[str, mx.array]):
                 else:
                     if path_for_content in flat_dict:
                         model_dict[key] = flat_dict[path_for_content]
+                        applied.add(path_for_content)
 
         elif isinstance(model_dict, list):
             for i, item in enumerate(model_dict):
@@ -1004,4 +1041,11 @@ def _load_weights_into_model(model, flat_weights: tp.Dict[str, mx.array]):
                     inside_sequential=inside_sequential)
 
     copy_weights_from_flat(model_state, flat_weights)
+    unapplied = [k for k in flat_weights if k not in applied]
+    if unapplied:
+        raise ValueError(
+            f"{len(unapplied)}/{len(flat_weights)} checkpoint tensors could not be "
+            f"placed in the model (first: {unapplied[:3]}). The checkpoint naming "
+            f"does not match this demucs-mlx version — reconvert the model."
+        )
     model.update(model_state)

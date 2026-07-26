@@ -21,6 +21,7 @@ dependencies = [
   "mlx-spectro>=0.2.4",
   "numpy",
   "packaging",
+  "safetensors",
   "tqdm",
 ]
 
