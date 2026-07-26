@@ -235,7 +235,13 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         default=None,
         help="Optional RNG seed for reproducible shifts",
     )
-    parser.add_argument("-b", "--batch-size", type=int, default=8, help="Batch size for inference")
+    parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size for inference (default: auto-sized from GPU memory)",
+    )
     parser.add_argument("--write-workers", type=int, default=1,
                         help="Number of concurrent audio writer threads")
     parser.add_argument("--prefetch-tracks", type=int, default=2,
@@ -258,7 +264,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         raise SystemExit("--overlap must be in [0, 1)")
     if args.segment is not None and float(args.segment) <= 0:
         raise SystemExit("--segment must be > 0")
-    if args.batch_size <= 0:
+    if args.batch_size is not None and args.batch_size <= 0:
         raise SystemExit("--batch-size must be > 0")
     if args.write_workers <= 0:
         raise SystemExit("--write-workers must be > 0")
@@ -275,6 +281,11 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     model = get_mlx_model(args.name)
     if hasattr(model, "eval"):
         model.eval()
+
+    from .apply_mlx import default_batch_size
+    batch_size = args.batch_size if args.batch_size is not None else default_batch_size()
+    if args.verbose and args.batch_size is None:
+        print(f"Auto batch size: {batch_size}")
 
     out_dir = Path(args.out)
     writer = _AsyncWriter(maxsize=max(8, args.write_workers * 4), workers=args.write_workers)
@@ -295,7 +306,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
                 overlap=args.overlap,
                 segment=args.segment,
                 split=not args.no_split,
-                batch_size=args.batch_size,
+                batch_size=batch_size,
                 verbose=args.verbose,
                 writer=writer,
             )

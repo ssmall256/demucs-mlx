@@ -17,6 +17,34 @@ _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
 _USE_SAFE_SLICE_ACCUMULATION = version.parse(mx.__version__) >= version.parse("0.31.2")
 
 
+def default_batch_size(working_set_bytes: tp.Optional[int] = None) -> int:
+    """Pick an inference batch size that fits the GPU's working set.
+
+    Large batches only pay off while the whole working set stays resident.
+    Measured on a 32 GB M2 Max (recommended working set ~25 GiB), htdemucs_6s:
+    batch 8 runs ~5x slower than batch 2 because the process spends most of
+    its wall time in the kernel shuffling memory, while batch 2 and batch 1
+    are within noise of each other. Machines with much larger working sets
+    (M4 Max class) keep their measured optimum of 8.
+
+    ``working_set_bytes`` overrides device detection (mainly for tests).
+    Falls back to the conservative 2 when no device info is available
+    (e.g. non-Metal builds).
+    """
+    if working_set_bytes is None:
+        try:
+            device_info = getattr(mx, "device_info", None) or mx.metal.device_info
+            working_set_bytes = int(device_info()["max_recommended_working_set_size"])
+        except Exception:
+            return 2
+    gib = working_set_bytes / (1 << 30)
+    if gib >= 64:
+        return 8
+    if gib >= 40:
+        return 4
+    return 2
+
+
 class TensorChunk:
     def __init__(self, tensor: mx.array, offset=0, length=None):
         total_length = tensor.shape[-1]

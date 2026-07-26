@@ -19,7 +19,7 @@ class Separator:
         seed: tp.Optional[int] = None,
         jobs: int = 0,
         progress: bool = False,
-        batch_size: int = 8,
+        batch_size: tp.Optional[int] = None,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
     ):
@@ -38,7 +38,7 @@ class Separator:
             raise ValueError("overlap must be in [0, 1).")
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
-        if int(batch_size) <= 0:
+        if batch_size is not None and int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
         if seed is not None:
             try:
@@ -51,7 +51,12 @@ class Separator:
         self.split = split
         self.segment = float(segment) if segment is not None else None
         self.seed = seed
-        self.batch_size = int(batch_size)
+        if batch_size is None:
+            from .apply_mlx import default_batch_size
+
+            self.batch_size = default_batch_size()
+        else:
+            self.batch_size = int(batch_size)
         self.jobs = jobs
         self.progress = progress
         self.callback = callback
