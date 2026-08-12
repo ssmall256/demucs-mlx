@@ -53,6 +53,15 @@ jobs:
     - name: Run apply_model overlap-add regression
       run: uv run python tests/test_apply_model_overlap_add.py
 
+    - name: Run audio resampling regression
+      run: uv run python tests/test_resample.py
+
+    - name: Run default batch-size regression
+      run: uv run python tests/test_default_batch_size.py
+
+    - name: Run audio prefetch stream regression
+      run: uv run python tests/test_prefetch_thread_stream.py
+
     - name: Test CLI
       run: uv run demucs-mlx --list-models
 

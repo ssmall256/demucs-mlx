@@ -10,6 +10,7 @@ import warnings
 import mlx.core as mx
 from packaging import version
 
+from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_utils import center_trim
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
@@ -75,7 +76,7 @@ def apply_model(
     progress: bool = False,
     num_workers: int = 0,
     segment: tp.Optional[float] = None,
-    batch_size: int = 8,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     seed: tp.Optional[int] = None,
     _rng: tp.Optional[random.Random] = None,
 ):

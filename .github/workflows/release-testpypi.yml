@@ -8,6 +8,13 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-testpypi-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_VERSION: ${{ inputs.version }}
+
 jobs:
   build-artifacts:
     name: Build RC artifacts
@@ -29,6 +36,38 @@ jobs:
 
       - name: Validate metadata
         run: python -m twine check dist/*
+
+      - name: Validate requested prerelease version
+        run: |
+          python - <<'PY'
+          import os
+          from email.parser import Parser
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          from packaging.version import Version
+
+          expected = os.environ["PACKAGE_VERSION"]
+          parsed = Version(expected)
+          if not parsed.is_prerelease:
+              raise SystemExit(f"TestPyPI requires a prerelease version, got {expected}")
+
+          wheels = list(Path("dist").glob("*.whl"))
+          sdists = list(Path("dist").glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(f"Expected one wheel and one sdist, got {wheels=} {sdists=}")
+
+          with ZipFile(wheels[0]) as archive:
+              metadata_path = next(
+                  name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+              )
+              metadata = Parser().parsestr(archive.read(metadata_path).decode())
+
+          actual = metadata["Version"]
+          if actual != expected:
+              raise SystemExit(f"Requested {expected}, but built distribution is {actual}")
+          print(f"Validated demucs-mlx {actual} release artifacts")
+          PY
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
@@ -60,8 +99,6 @@ jobs:
     name: Smoke install from TestPyPI (macOS)
     runs-on: macos-14
     needs: [publish-testpypi]
-    env:
-      PACKAGE_VERSION: ${{ github.event.inputs.version }}
     steps:
       - name: Setup Python
         uses: actions/setup-python@v5
