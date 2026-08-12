@@ -19,6 +19,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 - Python >= 3.10
 - macOS with Apple Silicon (recommended) or Linux with MLX
+- MLX 0.31.2 paired with mlx-audio-io 1.3.11; the native audio package does not yet support MLX 0.32
 
 ## Install
 
@@ -59,7 +60,7 @@ Options:
 --shifts            Number of random shifts (default: 1)
 --seed              Optional RNG seed for reproducible shifts (default: none)
 --overlap           Overlap ratio (default: 0.25)
--b, --batch-size    Batch size (default: 8)
+-b, --batch-size    Batch size (default: 2)
 --write-workers     Concurrent writer threads (default: 1)
 --list-models       List available models
 -v, --verbose       Verbose logging
@@ -90,6 +91,12 @@ For reproducible shift sampling (while keeping `shifts=1` behavior), pass a seed
 separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
+
+## What changed in 1.4.5
+
+- Fixed audio prefetch on MLX 0.31.2 by materializing decoded arrays on the producer thread before queue handoff.
+- Reduced the default inference batch size from 8 to 2 to avoid memory thrashing on 16–36 GB Macs; explicit `-b` values are unchanged.
+- Pinned MLX 0.31.2 and mlx-audio-io 1.3.11 as a compatible native runtime pair. MLX 0.32 support will follow a matching mlx-audio-io release.
 
 ## What changed in 1.4.4
 

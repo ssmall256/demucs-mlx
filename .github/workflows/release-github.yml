@@ -1,0 +1,151 @@
+name: Release (GitHub)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version already published to PyPI (for example: 1.4.5)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-github-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish-github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PACKAGE_VERSION: ${{ inputs.version }}
+      NOTES_FILE: /tmp/release-notes.md
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tools
+        run: python -m pip install --upgrade packaging
+
+      - name: Validate main ref and source version
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          if os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise SystemExit("GitHub releases must be dispatched from main")
+
+          expected = os.environ["PACKAGE_VERSION"]
+          parsed = Version(expected)
+          if parsed.is_prerelease or parsed.is_devrelease:
+              raise SystemExit(f"GitHub releases require a final version, got {expected}")
+
+          module = ast.parse(Path("demucs_mlx/__init__.py").read_text())
+          actual = None
+          for statement in module.body:
+              if not isinstance(statement, ast.Assign):
+                  continue
+              if any(isinstance(target, ast.Name) and target.id == "__version__" for target in statement.targets):
+                  actual = ast.literal_eval(statement.value)
+                  break
+          if actual != expected:
+              raise SystemExit(f"Requested {expected}, but source version is {actual}")
+          print(f"Validated main source version {actual}")
+          PY
+
+      - name: Confirm version exists on PyPI
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["PACKAGE_VERSION"]
+          url = f"https://pypi.org/pypi/demucs-mlx/{version}/json"
+          payload = None
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      payload = json.load(response)
+                  break
+              except urllib.error.HTTPError as exc:
+                  if exc.code != 404 or attempt == 11:
+                      raise
+                  time.sleep(10)
+          if payload is None or payload["info"]["version"] != version:
+              raise SystemExit(f"demucs-mlx {version} is not available on PyPI")
+          print(f"Confirmed demucs-mlx {version} on PyPI")
+          PY
+
+      - name: Reject existing tag or release
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${PACKAGE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${PACKAGE_VERSION} already exists" >&2
+            exit 1
+          fi
+          if gh release view "v${PACKAGE_VERSION}" >/dev/null 2>&1; then
+            echo "Release v${PACKAGE_VERSION} already exists" >&2
+            exit 1
+          fi
+
+      - name: Extract release notes
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          heading = f"## v{version}"
+          lines = Path("docs/release.md").read_text().splitlines()
+          try:
+              start = lines.index(heading) + 1
+          except ValueError:
+              raise SystemExit(f"Missing {heading} in docs/release.md") from None
+
+          end = next(
+              (index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+              len(lines),
+          )
+          notes = "\n".join(lines[start:end]).strip()
+          if not notes:
+              raise SystemExit(f"No release notes found under {heading}")
+
+          notes += (
+              f"\n\nInstall:\n\n```bash\n"
+              f"pip install -U demucs-mlx=={version}\n"
+              f"```\n\n[View demucs-mlx {version} on PyPI]"
+              f"(https://pypi.org/project/demucs-mlx/{version}/)\n"
+          )
+          Path(os.environ["NOTES_FILE"]).write_text(notes)
+          print(notes)
+          PY
+
+      - name: Create annotated tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${PACKAGE_VERSION}" -m "Release v${PACKAGE_VERSION}" "${GITHUB_SHA}"
+          git push origin "refs/tags/v${PACKAGE_VERSION}"
+
+      - name: Publish GitHub release
+        run: |
+          gh release create "v${PACKAGE_VERSION}" \
+            --verify-tag \
+            --title "v${PACKAGE_VERSION}" \
+            --notes-file "${NOTES_FILE}" \
+            --latest
