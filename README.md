@@ -92,6 +92,12 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
+## What changed in 1.4.6
+
+- Restricted official Demucs checkpoint loading to PyTorch 2.6+ with `weights_only=True`, a narrow class allowlist, hash verification, and strict package validation.
+- Replaced executable pickle caches with digest-verified MLX safetensors and versioned JSON metadata.
+- Legacy pickle caches are never opened; they are ignored while safe artifacts regenerate from the verified official registry.
+
 ## What changed in 1.4.5
 
 - Fixed audio prefetch on MLX 0.31.2 by materializing decoded arrays on the producer thread before queue handoff.
