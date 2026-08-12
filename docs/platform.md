@@ -6,6 +6,7 @@ This project is uv-first. All instructions below use uv and the `uv.lock` workfl
 
 - Apple Silicon is supported via MLX.
 - Audio I/O is handled natively by mlx-audio-io (no FFmpeg required).
+- The current native runtime pair is MLX 0.31.2 with mlx-audio-io 1.3.11. MLX 0.32 requires a future matching audio-I/O wheel.
 
 Typical flow:
 

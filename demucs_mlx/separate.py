@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
+from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_registry import MLX_MODEL_REGISTRY
 
 
@@ -126,12 +127,17 @@ def _iter_prefetched_audio(
     paths = [Path(track) for track in tracks]
 
     def _producer() -> None:
+        import mlx.core as mx
+
         try:
             for path in paths:
                 if done.is_set():
                     break
                 try:
                     wav = _load_audio(path, model)
+                    # MLX streams are thread-local. Materialize the lazy audio
+                    # graph on its producer thread before handing it off.
+                    mx.eval(wav)
                 except BaseException as exc:
                     q.put((path, None, exc))
                     break
@@ -218,7 +224,7 @@ def _separate_one(
             stage.close()
 
 
-def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="demucs-mlx",
         description="MLX-only Demucs stem separation",
@@ -235,7 +241,13 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         default=None,
         help="Optional RNG seed for reproducible shifts",
     )
-    parser.add_argument("-b", "--batch-size", type=int, default=8, help="Batch size for inference")
+    parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help=f"Batch size for inference (default: {DEFAULT_BATCH_SIZE})",
+    )
     parser.add_argument("--write-workers", type=int, default=1,
                         help="Number of concurrent audio writer threads")
     parser.add_argument("--prefetch-tracks", type=int, default=2,
@@ -243,6 +255,12 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     parser.add_argument("--no-split", action="store_true", help="Disable chunked inference")
     parser.add_argument("--list-models", action="store_true", help="List available models")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
+
+    return parser
+
+
+def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
+    parser = _build_parser()
 
     args = parser.parse_args(argv)
 
