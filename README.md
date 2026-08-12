@@ -92,7 +92,7 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
-## Upcoming release
+## What changed in 1.4.5
 
 - Fixed audio prefetch on MLX 0.31.2 by materializing decoded arrays on the producer thread before queue handoff.
 - Reduced the default inference batch size from 8 to 2 to avoid memory thrashing on 16–36 GB Macs; explicit `-b` values are unchanged.
