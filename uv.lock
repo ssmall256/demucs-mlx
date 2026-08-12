@@ -139,7 +139,7 @@ requires-dist = [
     { name = "packaging" },
     { name = "pyright", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "torch", marker = "extra == 'convert'" },
+    { name = "torch", marker = "extra == 'convert'", specifier = ">=2.6" },
     { name = "tqdm" },
 ]
 provides-extras = ["dev", "convert"]
