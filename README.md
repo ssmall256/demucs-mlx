@@ -29,7 +29,8 @@ pip install demucs-mlx
 
 On first run, demucs-mlx loads cached MLX weights if available. If the optional
 `mlx-weights` package is installed locally, demucs-mlx uses its shared cache. Otherwise
-it uses its built-in cache and conversion fallback.
+it uses its built-in cache. A cache miss is converted internally from the official
+Demucs registry using the restricted loader described below.
 
 To bootstrap a missing model with the public package, install the conversion extra:
 
@@ -37,11 +38,10 @@ To bootstrap a missing model with the public package, install the conversion ext
 pip install 'demucs-mlx[convert]'
 ```
 
-If you are developing with `mlx-weights` installed, you can also pre-convert through its
-shared cache:
+You can explicitly generate a safe cache in any directory with:
 
 ```bash
-mlx-weights convert demucs/htdemucs
+python -m demucs_mlx.mlx_convert htdemucs --output-dir ~/.cache/demucs-mlx
 ```
 
 Once weights are cached, the `convert` extra is no longer needed for inference.
@@ -148,8 +148,42 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 
 Pre-converted MLX weights are cached under `~/.cache/demucs-mlx` by default. When the
 optional `mlx-weights` package is installed, demucs-mlx uses its shared
-`~/.cache/mlx-weights/demucs-mlx` cache instead. Delete the active cache directory to
-force re-conversion.
+`~/.cache/mlx-weights/demucs-mlx` directory instead.
+
+Cache format v1 consists of `<model>.safetensors` and a versioned
+`<model>_config.json` sidecar. Arrays are saved and loaded with MLX's native
+safetensors support. The bounded JSON metadata records the exact MLX model classes and
+constructor data, ensemble shape and weights, ordered official Demucs source
+signatures/checksums, conversion time, actual MLX version, verification result, and the
+SHA-256 of the safetensors file. Exceptional constructor values such as `Fraction` use
+a narrowly validated tagged JSON representation. The digest and complete metadata are
+validated before arrays are loaded or a model is constructed.
+
+Older `<model>_mlx.pkl` files are unsafe legacy caches. demucs-mlx never opens,
+rewrites, or deletes them. If conversion dependencies are installed, a legacy-only
+cache is ignored and safe v1 artifacts are regenerated from the verified official
+source. Without automatic conversion, the error includes the ignored pickle path and
+the exact regeneration command. Partial, corrupt, unversioned, or otherwise invalid
+safetensors/config pairs fail closed and never fall back to a pickle; move those safe
+artifacts aside and run, for example:
+
+```bash
+python -m demucs_mlx.mlx_convert htdemucs --output-dir ~/.cache/demucs-mlx
+```
+
+### Model trust boundary
+
+Conversion requires PyTorch 2.6 or newer before any checkpoint is downloaded or
+deserialized. Official packages retain filename-hash verification and are loaded with
+`weights_only=True` plus a scoped allowlist of exact Demucs classes and narrowly needed
+compatibility types. The package shape, exact model class, constructors, and ordinary
+or quantized state are validated before trusted Demucs code constructs a model. There
+is no unrestricted fallback.
+
+Installed PyTorch, Demucs, NumPy, optional DiffQ quantization code, MLX, and the packaged
+official model registry are inside the trust boundary. Arbitrary checkpoint globals
+and local pickle caches are not trusted. Restricted loading prevents executable pickle
+globals; it is not a resource-exhaustion sandbox for otherwise valid tensor files.
 
 ## Documentation
 
