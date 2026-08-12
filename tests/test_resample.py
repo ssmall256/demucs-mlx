@@ -37,6 +37,10 @@ def _assert_resample_basic() -> None:
 
 def _assert_resample_soxr_vhq() -> None:
     """soxr_vhq quality produces numerically different (higher quality) results than 'fastest'."""
+    if not mac.supports_soxr():
+        print("test_resample.py: SKIP soxr_vhq (mlx-audio-io built without libsoxr)")
+        return
+
     sr_in, sr_out = 48000, 44100
     audio = _make_sine_wav(sr_in, duration=0.5, channels=1)
     r_fast = mac.resample(audio, sr_in, sr_out, quality="fastest")
