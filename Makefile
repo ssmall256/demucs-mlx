@@ -11,6 +11,7 @@ test:
 	python tests/test_metal_kernels.py
 	python tests/test_apply_model_chunk_seed.py
 	python tests/test_model_converter_optional_mlx_weights.py
+	python tests/test_demucs_security.py
 	python tests/test_apply_model_overlap_add.py
 	python tests/test_resample.py
 	python tests/test_default_batch_size.py
