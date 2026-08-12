@@ -50,6 +50,9 @@ jobs:
     - name: Run optional mlx-weights integration regression
       run: uv run python tests/test_model_converter_optional_mlx_weights.py
 
+    - name: Run safe-cache regressions without conversion dependencies
+      run: uv run python tests/test_demucs_security.py
+
     - name: Run apply_model overlap-add regression
       run: uv run python tests/test_apply_model_overlap_add.py
 
@@ -74,3 +77,20 @@ jobs:
         assert 'htdemucs' in models['single']
         print('Import test passed')
         "
+
+  conversion-security:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Install conversion and test dependencies
+      run: uv sync --extra dev --extra convert
+
+    - name: Run checkpoint and cache security regressions
+      run: uv run python tests/test_demucs_security.py

@@ -1,5 +1,14 @@
 # Release notes for demucs-mlx
 
+## v1.4.6
+
+Security release for Demucs checkpoint and MLX cache loading.
+
+- Required PyTorch 2.6 or newer for conversion and replaced upstream unrestricted checkpoint deserialization with `weights_only=True`, scoped safe globals, official filename-hash verification, and strict package validation.
+- Replaced executable MLX pickle caches with native safetensors plus a bounded, versioned JSON sidecar whose source provenance, constructors, ensemble metadata, and SHA-256 digest are verified before model construction.
+- Made legacy pickle caches non-executable migration markers: they are never opened, rewritten, or deleted, and legacy-only caches regenerate safe artifacts from verified official sources.
+- Added fail-closed regression and CI coverage for malicious checkpoints, legacy pickle payloads, malformed metadata/state, incomplete caches, and single-model or ensemble round trips.
+
 ## v1.4.5
 
 Bugfix release for GitHub issues #5 and #7.
