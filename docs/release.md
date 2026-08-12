@@ -1,5 +1,12 @@
 # Release notes for demucs-mlx
 
+## Unreleased
+
+- Fixed MLX 0.31.2 thread-local stream failures in the CLI audio prefetch path by evaluating decoded arrays on their producer thread.
+- Changed the CLI, `Separator`, and `apply_model` inference batch default from 8 to 2 to avoid memory thrashing on lower-memory Macs. Explicit batch values remain supported.
+- Pinned MLX 0.31.2 and mlx-audio-io 1.3.11 as a compatible native runtime pair. MLX 0.32 support is deferred until a matching mlx-audio-io wheel is available.
+- Added regression coverage for prefetched audio handoff and the shared batch default.
+
 ## v1.4.4
 
 Bugfix release for GitHub issue #1.
