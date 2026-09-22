@@ -92,6 +92,22 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
+## What changed in 1.4.7
+
+- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. Measured on a 45 s clip
+  through `htdemucs`, they cost about 20 dB SNR against the unfused path (19.7 dB on
+  drums, 23.7 dB on other) because the kernel uses an erf-approximation GELU and
+  threadgroup reductions whose width varies with tensor shape -- and they are not faster
+  (0.783 s fused against 0.776 s unfused, median of five runs). Set
+  `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to re-enable them for benchmarking. The fused and
+  unfused layers expose identical parameter names, so an existing converted cache loads
+  either way.
+- Added `DEMUCS_MLX_USE_FUSED_GN_GLU` in the first place: these kernels were previously
+  wired in unconditionally, so there was no way to rule them out when output looked wrong
+  without editing the package.
+- Dependency pins aligned for the coordinated release: `mlx-spectro>=0.9.0`, which carries
+  a fix for wrong `differentiable_istft` gradients at batch sizes above 1.
+
 ## What changed in 1.4.6
 
 - Restricted official Demucs checkpoint loading to PyTorch 2.6+ with `weights_only=True`, a narrow class allowlist, hash verification, and strict package validation.

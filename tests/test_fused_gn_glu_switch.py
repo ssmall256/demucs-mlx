@@ -55,13 +55,15 @@ def _probe(value):
     return json.loads(result.stdout)
 
 
-def test_switch_defaults_to_enabled():
+def test_switch_defaults_to_disabled():
+    """Fused kernels cost ~20 dB SNR against the unfused path and are not
+    faster, so they are opt-in."""
     from demucs_mlx.mlx_layers import _use_fused_gn_glu
 
-    assert _use_fused_gn_glu() is True
+    assert _use_fused_gn_glu() is False
 
 
-@pytest.mark.parametrize("value", ["0", "false", "no", "off", "OFF"])
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "OFF", ""])
 def test_switch_recognizes_disabling_values(monkeypatch, value):
     from demucs_mlx.mlx_layers import _use_fused_gn_glu
 
@@ -69,7 +71,7 @@ def test_switch_recognizes_disabling_values(monkeypatch, value):
     assert _use_fused_gn_glu() is False
 
 
-@pytest.mark.parametrize("value", ["1", "true", "on", ""])
+@pytest.mark.parametrize("value", ["1", "true", "on", "YES"])
 def test_switch_recognizes_enabling_values(monkeypatch, value):
     from demucs_mlx.mlx_layers import _use_fused_gn_glu
 
