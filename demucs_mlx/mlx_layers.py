@@ -175,15 +175,21 @@ class ConvTranspose2dNCHW(nn.Module):
 def _use_fused_gn_glu() -> bool:
     """Whether to build fused GroupNorm+activation Metal kernels.
 
-    Defaults to enabled, which is the long-standing behavior. Set
-    DEMUCS_MLX_USE_FUSED_GN_GLU=0 to fall back to stock GroupNorm plus a
-    separate activation. The fused and unfused layers expose the same
-    parameter names, so an existing converted cache loads either way -- this is
-    a diagnostic lever for isolating custom-kernel numerics, not a format
-    change.
+    Defaults to disabled. These kernels were on unconditionally until they were
+    measured against the unfused path on a 45 s clip through htdemucs: they
+    cost roughly 20 dB SNR (19.7 dB on drums, 23.7 dB on other) -- audible, not
+    float noise -- because the kernel uses an erf-approximation GELU and
+    threadgroup reductions whose width varies with tensor shape. They are also
+    not faster: 0.783 s fused vs 0.776 s unfused, median of five timed runs,
+    since at real Demucs shapes the group size mostly exceeds the hybrid
+    threshold and falls back anyway. Strictly worse on both axes.
+
+    Set DEMUCS_MLX_USE_FUSED_GN_GLU=1 to re-enable them for benchmarking. The
+    fused and unfused layers expose the same parameter names, so an existing
+    converted cache loads either way.
     """
-    raw = os.getenv("DEMUCS_MLX_USE_FUSED_GN_GLU", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
+    raw = os.getenv("DEMUCS_MLX_USE_FUSED_GN_GLU", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 class GroupNormNCL(nn.Module):
