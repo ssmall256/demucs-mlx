@@ -23,9 +23,11 @@ from .mlx_layers import (
     GroupNormNCL,
     Identity,
 )
+from .mlx_layers import _use_fused_gn_glu
 from .mlx_utils import MLXStateDictMixin
 from .spec_mlx import CachedSpectralPair
 from .wiener_mlx import wiener
+
 
 
 def pad1d(x: mx.array, paddings: tp.Tuple[int, int], mode: str = "constant", value: float = 0.0):
@@ -131,8 +133,9 @@ class HEncLayer(nn.Module):
         if self.empty:
             return
         # Use fused GroupNorm+GELU when norm is enabled
-        self._fused_norm1 = bool(norm)
-        if norm:
+        use_fused = bool(norm) and _use_fused_gn_glu()
+        self._fused_norm1 = use_fused
+        if use_fused:
             self.norm1 = FusedGroupNormGELU(norm_groups, chout)
         else:
             self.norm1 = norm_fn(chout)
@@ -143,7 +146,7 @@ class HEncLayer(nn.Module):
                 self.rewrite = Conv2dNCHW(chout, 2 * chout, 1 + 2 * context, 1, context)
             else:
                 self.rewrite = Conv1dNCL(chout, 2 * chout, 1 + 2 * context, 1, context)
-            if norm:
+            if use_fused:
                 self.norm2 = FusedGroupNormGLU(norm_groups, 2 * chout)
                 self._fused_norm2 = True
             else:
@@ -245,7 +248,7 @@ class HDecLayer(nn.Module):
                     self.rewrite = Conv2dNCHW(chin, 2 * chin, [1, 1 + 2 * context], 1, [0, context])
             else:
                 self.rewrite = Conv1dNCL(chin, 2 * chin, 1 + 2 * context, 1, context)
-            if norm:
+            if norm and _use_fused_gn_glu():
                 self.norm1 = FusedGroupNormGLU(norm_groups, 2 * chin)
                 self._fused_norm1 = True
             else:
