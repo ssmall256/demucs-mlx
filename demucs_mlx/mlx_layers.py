@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import typing as tp
 
+import os
+
 import mlx.core as mx
 import mlx.nn as nn
 
@@ -168,6 +170,20 @@ class ConvTranspose2dNCHW(nn.Module):
         x = x.transpose(0, 2, 3, 1)
         y = self.conv(x)
         return y.transpose(0, 3, 1, 2)
+
+
+def _use_fused_gn_glu() -> bool:
+    """Whether to build fused GroupNorm+activation Metal kernels.
+
+    Defaults to enabled, which is the long-standing behavior. Set
+    DEMUCS_MLX_USE_FUSED_GN_GLU=0 to fall back to stock GroupNorm plus a
+    separate activation. The fused and unfused layers expose the same
+    parameter names, so an existing converted cache loads either way -- this is
+    a diagnostic lever for isolating custom-kernel numerics, not a format
+    change.
+    """
+    raw = os.getenv("DEMUCS_MLX_USE_FUSED_GN_GLU", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 class GroupNormNCL(nn.Module):

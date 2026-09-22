@@ -14,7 +14,7 @@ from functools import lru_cache
 import mlx.core as mx
 import mlx.nn as nn
 
-from .mlx_layers import Conv1dNCL, ConvTranspose1dNCL, Lambda
+from .mlx_layers import _use_fused_gn_glu, Conv1dNCL, ConvTranspose1dNCL, Lambda
 from .mlx_utils import MLXStateDictMixin, center_trim, unfold
 
 # ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ class DConv(nn.Module):
         act = gelu if gelu_act else (lambda x: mx.maximum(x, 0))
 
         # Use FusedGroupNormGELU when norm is enabled and activation is gelu
-        use_fused_gn_gelu = norm and gelu_act
+        use_fused_gn_gelu = norm and gelu_act and _use_fused_gn_glu()
 
         self.layers = []
         for d in range(self.depth):
