@@ -92,6 +92,24 @@ separator = Separator(model="htdemucs", shifts=1, seed=0)
 origin, stems = separator.separate_audio_file("song.wav")
 ```
 
+## Tuning
+
+**The defaults are the recommended configuration.** You should not need to set
+anything to get the best results; this section exists so the levers are
+discoverable rather than buried in source.
+
+| Setting | Default | Why |
+|---|---|---|
+| `-b` / `--batch-size` | `2` | Fastest and smallest. Larger batches thrash memory on 16-36 GB Macs. |
+| `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
+| `--overlap` | `0.25` | Matches upstream Demucs. |
+
+### Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Re-enables the fused GroupNorm+GELU/GLU Metal kernels. Measured on a 45 s clip through `htdemucs` they cost ~20 dB SNR against the unfused path (19.7 dB on drums, 23.7 dB on other) and are *not* faster (0.783 s vs 0.776 s, median of five runs), so they are opt-in and only useful for benchmarking the kernels themselves. Switching it does not change the model's parameter names, so an existing converted cache loads either way. |
+
 ## What changed in 1.4.7
 
 - Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. Measured on a 45 s clip
