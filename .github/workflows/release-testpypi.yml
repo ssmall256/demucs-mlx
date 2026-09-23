@@ -32,11 +32,9 @@ jobs:
         run: python -m pip install --upgrade pip build twine
 
       # The version lives in demucs_mlx/__init__.py (pyproject reads it via
-      # `attr:`), so an RC used to need its own commit bumping that string and
-      # another one putting it back. Inject it instead; the working tree is
-      # discarded with the runner. Release builds are untouched and still use
-      # the committed version, which release-github.yml checks against the tag.
-      - name: Set RC version from workflow input
+      # `attr:`), so it is rewritten here rather than in pyproject.toml. The
+      # edit is discarded with the runner.
+      - name: Set version from workflow input
         run: |
           python - <<'PY'
           import os
