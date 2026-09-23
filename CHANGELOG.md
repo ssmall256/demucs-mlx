@@ -7,6 +7,43 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.9 - 2026-09-23
+
+### Fixed
+
+- **The fused GroupNorm Metal kernels had a missing threadgroup barrier.** The
+  three-pass reduction shares one `shared_sums` array: pass 1 ends with every
+  simdgroup reading slot 0 as the mean, and pass 2 has simdgroup 0 write that
+  same slot with nothing between. A fast simdgroup could clobber the mean before
+  a lagging one had loaded it, poisoning a whole (batch, group) slab. The window
+  is widest when pass 2's loop is *short* — small `elems_per_group` — which is
+  exactly the frequency-branch DConv shapes (2,016–16,128 elements, comfortably
+  under `_HYBRID_THRESHOLD`, so they do run the kernel).
+
+  | | before | after |
+  |---|---|---|
+  | relative error at real shapes | 1.6e-02 | **2.0e-07** |
+  | run-to-run | varies | **identical** |
+  | end-to-end SNR | ~20 dB | **118.2 dB** |
+
+  `DEMUCS_MLX_USE_FUSED_GN_GLU` stays off by default, but the reason changes:
+  the kernels are now correct and simply not faster (1.7331 s against a 1.7270 s
+  control at a 1.76% noise floor on an idle M4). The "costs ~20 dB" reason
+  recorded in 1.4.7 no longer applies.
+
+  The only fused-vs-unfused test fed a **constant** input, which makes the
+  reduction order-independent by construction and could not have caught this.
+  The new test uses random data at real shapes and checks run-to-run
+  determinism.
+
+- Corrects a comment claiming `metal::precise::erf()` exists. It does not —
+  `metal::erf`, bare `erf` and `metal::precise::erf` all fail to compile with or
+  without `<metal_math>`, and the Metal SDK ships no `erf`. The Abramowitz &
+  Stegun polynomial is required, not a shortcut.
+
+- Import ordering cleaned up in `mlx_demucs.py`, `mlx_hdemucs.py` and
+  `mlx_layers.py`.
+
 ## 1.4.8 - 2026-09-23
 
 ### Fixed

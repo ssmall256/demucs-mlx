@@ -4,9 +4,8 @@ Optimized for memory layout efficiency.
 """
 from __future__ import annotations
 
-import typing as tp
-
 import os
+import typing as tp
 
 import mlx.core as mx
 import mlx.nn as nn
