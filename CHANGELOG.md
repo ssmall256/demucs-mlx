@@ -7,6 +7,13 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.13 - 2026-09-23
+
+### Removed
+
+- A `.gitignore` entry naming assistant tooling. It lives in a global ignore
+  file instead, so the repository does not carry it.
+
 ## 1.4.12 - 2026-09-23
 
 ### Fixed
