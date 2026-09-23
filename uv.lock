@@ -132,9 +132,9 @@ dev = [
 requires-dist = [
     { name = "build", marker = "extra == 'dev'" },
     { name = "demucs", marker = "extra == 'convert'", specifier = ">=4.0" },
-    { name = "mlx", specifier = "==0.31.2" },
-    { name = "mlx-audio-io", specifier = "==1.3.11" },
-    { name = "mlx-spectro", specifier = ">=0.2.4" },
+    { name = "mlx", specifier = ">=0.31.2,<0.33" },
+    { name = "mlx-audio-io", specifier = ">=1.3.12,<1.4" },
+    { name = "mlx-spectro", specifier = ">=0.9.0" },
     { name = "numpy" },
     { name = "packaging" },
     { name = "pyright", marker = "extra == 'dev'" },
@@ -385,13 +385,13 @@ cpu = [
 
 [[package]]
 name = "mlx-audio-io"
-version = "1.3.11"
+version = "1.3.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mlx", extra = ["cpu"], marker = "sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/28/26/47761af9c2052280983bada872d1204607a72236ae3c3ff0a6459fe27a05/mlx_audio_io-1.3.11.tar.gz", hash = "sha256:5e9f4e6bbca373cac5a51b9d6b19224cf2ea20f01ef751e34a4a986a01da327d", size = 335312, upload-time = "2026-06-14T03:22:29.728Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/3d/eafc6dd1da46b8911091f95b11d55f3746b44c0b4811f4fb51003380bbe6/mlx_audio_io-1.3.12.tar.gz", hash = "sha256:4ffb0f69ae700987b68175d5dfc40998b909389b9f69af90cf66f26248c2caaf", size = 350602, upload-time = "2026-09-23T01:15:33.601Z" }
 
 [[package]]
 name = "mlx-cpu"
@@ -414,16 +414,16 @@ wheels = [
 
 [[package]]
 name = "mlx-spectro"
-version = "0.2.4"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/12/a0/22aacb491f234aa86ecc2da6bb1dcc306889ab0816f0a85b2abb3aac1d6b/mlx_spectro-0.2.4.tar.gz", hash = "sha256:0fd93e027e59aa2871bee5f070eccdeee5bf83d0d9deb594fe6a5834d6a81abb", size = 81662, upload-time = "2026-03-06T05:11:32.508Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/34/17867522500a3c73d03981d611935b34509a30bb892cf47c89d3823fda15/mlx_spectro-0.9.0.tar.gz", hash = "sha256:57dc1ec095625ed6412733765531e646ab30eccabde6d02c386614eac11794f2", size = 187542, upload-time = "2026-09-23T01:07:26.32Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/2b/b629e8a77754972960922ee217b5fab9dad6f7d20c12ab2611c7b94af7db/mlx_spectro-0.2.4-py3-none-any.whl", hash = "sha256:90e8a2e53e0ddfca9d0fd998560b778699bbfbc42885154b8e419ef107ebefa9", size = 33042, upload-time = "2026-03-06T05:11:30.964Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/cc/cef1a7ba6eebeacfa2f9d95076a347e0e0e4c21ebf2d6604d201c266c73a/mlx_spectro-0.9.0-py3-none-any.whl", hash = "sha256:b1743165ca228533d2c6e1898a28df20a3577c2f8f0678f01206470b3e74c155", size = 78978, upload-time = "2026-09-23T01:07:22.986Z" },
 ]
 
 [[package]]
