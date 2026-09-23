@@ -7,6 +7,31 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.14 - 2026-09-23
+
+### Changed
+
+- The release smoke gate installs the published artifact by URL resolved from the
+  release API, instead of resolving the version through the package index. The two
+  content-negotiated renderings of `/simple/<project>/` can serve different
+  snapshots, so an index resolve could fail for a version that was published and
+  intact.
+- The publish step refuses to run when the version is already on the index unless
+  `allow_existing` is set, so a re-dispatch cannot skip the upload and still report
+  success.
+- Publishing to PyPI now requires a matching TestPyPI release, with `skip_rc_check`
+  to override.
+
+### Fixed
+
+- The GitHub release workflow compared `info.version` from the PyPI project API,
+  a cached "latest" view that lags a just-published release; it now relies on the
+  per-version endpoint. Its changelog heading matcher also accepts the bracketed
+  `## [1.2.3]` style.
+- The comment on the overlap-add accumulation guard now records the accurate MLX
+  range for the strided scatter-add corruption (below 0.32.0, ml-explore/mlx#3676)
+  and notes that the package floor keeps the safe path unconditional.
+
 ## 1.4.13 - 2026-09-23
 
 ### Removed
