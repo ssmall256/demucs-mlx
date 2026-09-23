@@ -19,7 +19,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 - Python >= 3.10
 - macOS with Apple Silicon (recommended) or Linux with MLX
-- MLX 0.31.2 paired with mlx-audio-io 1.3.11; the native audio package does not yet support MLX 0.32
+- MLX 0.31.2 to 0.32.x, with mlx-audio-io 1.3.x and mlx-spectro 0.9.3 or newer
 
 ## Install
 
@@ -108,55 +108,11 @@ discoverable rather than buried in source.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Re-enables the fused GroupNorm+GELU/GLU Metal kernels. Measured on a 45 s clip through `htdemucs` they cost ~20 dB SNR against the unfused path (19.7 dB on drums, 23.7 dB on other) and are *not* faster (0.783 s vs 0.776 s, median of five runs), so they are opt-in and only useful for benchmarking the kernels themselves. Switching it does not change the model's parameter names, so an existing converted cache loads either way. |
+| `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Runs GroupNorm+GELU/GLU through fused Metal kernels instead of the pure-MLX path. Output agrees with the unfused path to 118 dB SNR and is deterministic run to run. Timing is a wash on current hardware — 1.7331 s against a 1.7270 s control at a 1.76% noise floor — so the unfused path stays the default. Both paths expose identical parameter names, so an existing converted cache loads either way. |
 
-## What changed in 1.4.7
+## Version history
 
-- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. The unfused
-  path is the same speed on current hardware, so there is nothing to trade.
-  Set `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to enable them; output matches the unfused
-  path to ~118 dB SNR. Fused and unfused layers expose identical parameter
-  names, so a converted cache loads either way.
-- Added `DEMUCS_MLX_USE_FUSED_GN_GLU` in the first place: these kernels were previously
-  wired in unconditionally, so there was no way to rule them out when output looked wrong
-  without editing the package.
-- Dependency pins aligned for the coordinated release: `mlx-spectro>=0.9.0`, which carries
-  a fix for wrong `differentiable_istft` gradients at batch sizes above 1.
-
-## What changed in 1.4.6
-
-- Restricted official Demucs checkpoint loading to PyTorch 2.6+ with `weights_only=True`, a narrow class allowlist, hash verification, and strict package validation.
-- Replaced executable pickle caches with digest-verified MLX safetensors and versioned JSON metadata.
-- Legacy pickle caches are never opened; they are ignored while safe artifacts regenerate from the verified official registry.
-
-## What changed in 1.4.5
-
-- Fixed audio prefetch on MLX 0.31.2 by materializing decoded arrays on the producer thread before queue handoff.
-- Reduced the default inference batch size from 8 to 2 to avoid memory thrashing on 16–36 GB Macs; explicit `-b` values are unchanged.
-- Pinned MLX 0.31.2 and mlx-audio-io 1.3.11 as a compatible native runtime pair. MLX 0.32 support will follow a matching mlx-audio-io release.
-
-## What changed in 1.4.4
-
-- Fixed multi-segment `split=True` overlap-add on MLX 0.31.2. Long inputs no longer produce high-amplitude reconstruction spikes.
-- Added regression coverage for split-mode overlap-add and an optional model-level reproduction for issue #1.
-
-## What changed in 1.4.3
-
-- `resample_mx()` now uses direct `mac.resample()` instead of writing/reading a temp file — eliminates an unnecessary MLX→numpy→disk→MLX round-trip.
-- Bumped minimum `mlx-audio-io` to `>=1.3.9` (auto-selects best resampling quality).
-
-## What changed in 1.4.2
-
-- Audio loading now stays as native MLX arrays end-to-end (no numpy round-trip).
-- Automatic resampling via `mlx-audio-io` — input files no longer need to match the model sample rate.
-- Uses `soxr_vhq` resampling quality when available, with automatic fallback.
-- Bumped minimum dependencies: `mlx>=0.31.0`, `mlx-audio-io>=1.3.8`, `mlx-spectro>=0.2.4`.
-
-## What changed in 1.4.0
-
-- Fixed shifted-inference `TensorChunk` propagation so chunk length/offset is handled correctly in all paths.
-- Added optional deterministic RNG control (`seed`) for Python API and CLI.
-- Default behavior is unchanged: `shifts=1` remains stochastic unless `seed` is provided.
+See [CHANGELOG.md](CHANGELOG.md), which the release workflow reads directly.
 
 ## Performance
 
