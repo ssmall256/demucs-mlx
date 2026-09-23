@@ -110,12 +110,27 @@ jobs:
           from pathlib import Path
 
           version = os.environ["PACKAGE_VERSION"]
-          heading = f"## v{version}"
-          lines = Path("docs/release.md").read_text().splitlines()
-          try:
-              start = lines.index(heading) + 1
-          except ValueError:
-              raise SystemExit(f"Missing {heading} in docs/release.md") from None
+          source = Path("CHANGELOG.md")
+          lines = source.read_text().splitlines()
+
+          # Accept "## 1.4.7", "## v1.4.7" and "## 1.4.7 - 2026-09-22". The old
+          # parser required the exact line "## v{version}", so the house
+          # "## X.Y.Z - DATE" heading style silently failed the release.
+          def is_heading(line: str) -> bool:
+              if not line.startswith("## "):
+                  return False
+              token = line[3:].strip().split()[0] if line[3:].strip() else ""
+              return token.lstrip("v") == version
+
+          start = next(
+              (index + 1 for index, line in enumerate(lines) if is_heading(line)),
+              None,
+          )
+          if start is None:
+              raise SystemExit(
+                  f"Missing a '## {version}' section in {source}. "
+                  "Add the release notes there before publishing."
+              )
 
           end = next(
               (index for index in range(start, len(lines)) if lines[index].startswith("## ")),
@@ -123,7 +138,7 @@ jobs:
           )
           notes = "\n".join(lines[start:end]).strip()
           if not notes:
-              raise SystemExit(f"No release notes found under {heading}")
+              raise SystemExit(f"No release notes found under the {version} heading")
 
           notes += (
               f"\n\nInstall:\n\n```bash\n"

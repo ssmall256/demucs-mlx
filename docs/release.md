@@ -1,5 +1,9 @@
 # Release notes for demucs-mlx
 
+> Superseded by [`CHANGELOG.md`](../CHANGELOG.md), which the release
+> workflow now reads. Kept for the 1.0.0 "Differences from upstream
+> Demucs" section below; new entries go in the changelog.
+
 ## v1.4.6
 
 Security release for Demucs checkpoint and MLX cache loading.
