@@ -7,6 +7,20 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.8 - 2026-09-23
+
+### Fixed
+
+- **Upgrading past 1.4.6 made every existing cache a hard failure.** 1.4.6
+  hardened the safetensors cache and its loader now requires fields no earlier
+  cache contains, but `get_mlx_model` only caught `FileNotFoundError` when
+  deciding to convert. A cache that existed and could not be validated raised
+  `SafeCacheError` straight out to the caller, so the one code path that would
+  have recovered never ran — every user with a cache written before 1.4.6 hit an
+  unrecoverable error on their first run after upgrading. An unusable cache now
+  regenerates from the official registry, which is also the right response to a
+  digest mismatch: discard the suspect file and refetch something verified.
+
 ## 1.4.7 - 2026-09-22
 
 ### Changed
