@@ -39,7 +39,7 @@ def get_mlx_model(name: str, repo: tp.Optional[Path] = None):
     """
     Get an MLX model, loading from cache or converting from PyTorch if needed.
     """
-    from .mlx_convert import convert_htdemucs_weights, load_mlx_model
+    from .mlx_convert import SafeCacheError, convert_htdemucs_weights, load_mlx_model
 
     cache_dir = get_mlx_cache_dir()
 
@@ -53,18 +53,30 @@ def get_mlx_model(name: str, repo: tp.Optional[Path] = None):
     except FileNotFoundError:
         # If we are here, the model is missing.
         logger.info("Cache miss for '%s'. Converting from the official registry...", name)
-        convert_htdemucs_weights(
+    except SafeCacheError as exc:
+        # A cache that exists but cannot be trusted. Every cache written before
+        # 1.4.6 lacks the fields the hardened loader requires, so without this
+        # branch upgrading turned a self-healing cache miss into a hard failure
+        # for every existing user. Regenerating is also the right response to a
+        # digest mismatch: discard the suspect file and refetch from the
+        # official registry, which verifies what it downloads.
+        logger.info(
+            "Unusable cache for '%s' (%s). Regenerating from the official registry...",
             name,
-            output_dir=str(cache_dir),
-            verify=False,
-            verbose=True,
+            exc,
         )
+    convert_htdemucs_weights(
+        name,
+        output_dir=str(cache_dir),
+        verify=False,
+        verbose=True,
+    )
 
-        # Load the newly converted model
-        logger.info("Loading converted model...")
-        return load_mlx_model(
-            name,
-            cache_dir=str(cache_dir),
-            auto_convert=False,
-            verbose=True,
-        )
+    # Load the newly converted model
+    logger.info("Loading converted model...")
+    return load_mlx_model(
+        name,
+        cache_dir=str(cache_dir),
+        auto_convert=False,
+        verbose=True,
+    )
