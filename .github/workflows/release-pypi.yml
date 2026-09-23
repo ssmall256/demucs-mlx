@@ -115,6 +115,7 @@ jobs:
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          skip-existing: true
           attestations: true
 
   smoke-macos:
@@ -127,46 +128,56 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Wait for and download from PyPI
+      - name: Resolve the published demucs-mlx artifact
+        run: |
+          # pip resolves against the PEP 691 JSON rendering of
+          # /simple/<project>/. That rendering is cached separately from the
+          # PEP 503 HTML one and the two can serve different snapshots of the
+          # same URL, so a freshly published version may be invisible to pip
+          # while every other view of PyPI already shows it. Ask the release
+          # API for the file directly, which sits outside that split, and
+          # install the artifact by URL.
+          python - <<'PY' >> "${GITHUB_ENV}"
+          import json
+          import os
+          import time
+          import urllib.request
+
+          name = "demucs-mlx"
+          version = os.environ["PACKAGE_VERSION"]
+          api = f"https://pypi.org/pypi/{name}/{version}/json"
+
+          for _ in range(60):
+              try:
+                  with urllib.request.urlopen(api, timeout=30) as response:
+                      files = json.load(response)["urls"]
+              except Exception:
+                  files = []
+              for kind in ("bdist_wheel", "sdist"):
+                  for entry in files:
+                      if entry["packagetype"] == kind:
+                          print(f"ARTIFACT_URL={entry['url']}")
+                          raise SystemExit(0)
+              time.sleep(10)
+
+          raise SystemExit(
+              f"{name} {version} did not reach PyPI within 10 minutes"
+          )
+          PY
+
+      - name: Install demucs-mlx from the resolved artifact
         run: |
           python -m pip install --upgrade pip
-          wheel_dir="${RUNNER_TEMP}/demucs-mlx-wheel"
-          mkdir -p "${wheel_dir}"
-          for attempt in {1..60}; do
-            if python -m pip download \
-              --no-deps \
-              --no-cache-dir \
-              --only-binary=:all: \
-              --dest "${wheel_dir}" \
-              "demucs-mlx==${PACKAGE_VERSION}"; then
-              break
-            fi
-            if [ "${attempt}" -eq 60 ]; then
-              echo "demucs-mlx ${PACKAGE_VERSION} did not reach PyPI within 10 minutes" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-
-          shopt -s nullglob
-          wheels=("${wheel_dir}"/demucs_mlx-"${PACKAGE_VERSION}"-*.whl)
-          if [ "${#wheels[@]}" -ne 1 ]; then
-            echo "Expected exactly one demucs-mlx ${PACKAGE_VERSION} wheel, found ${#wheels[@]}" >&2
-            exit 1
-          fi
-          echo "WHEEL_PATH=${wheels[0]}" >> "${GITHUB_ENV}"
-
-      - name: Install downloaded wheel
-        run: |
-          # The wait only proves this package has propagated; a freshly
-          # published dependency can still be missing from the mirror pip
-          # resolves against. A resolution failure costs nothing, so retry.
+          # The artifact URL is exact, but dependencies still resolve through
+          # the index, so retry: a freshly published dependency can be missing
+          # from the mirror pip reads. A resolution failure costs nothing.
           for attempt in {1..8}; do
-            if python -m pip install --no-cache-dir "${WHEEL_PATH}"; then
+            if python -m pip install --no-cache-dir \
+              "${ARTIFACT_URL}"; then
               break
             fi
             if [ "${attempt}" -eq 8 ]; then
-              echo "Could not install ${WHEEL_PATH}" >&2
+              echo "Could not install ${ARTIFACT_URL}" >&2
               exit 1
             fi
             sleep 15
