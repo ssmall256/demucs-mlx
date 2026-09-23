@@ -31,6 +31,29 @@ jobs:
       - name: Install packaging tools
         run: python -m pip install --upgrade pip build twine
 
+      - name: Set version from workflow input
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          path = Path("demucs_mlx/__init__.py")
+          source = path.read_text()
+          patched, count = re.subn(
+              r'^__version__ = ".*"$',
+              f'__version__ = "{version}"',
+              source,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit(f"Could not find __version__ in {path}")
+          path.write_text(patched)
+          print(f"Building demucs-mlx {version}")
+          PY
+
       - name: Build sdist and wheel
         run: python -m build
 
