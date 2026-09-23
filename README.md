@@ -112,13 +112,14 @@ discoverable rather than buried in source.
 
 ## What changed in 1.4.7
 
-- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. Measured on a 45 s clip
-  through `htdemucs`, they cost about 20 dB SNR against the unfused path (19.7 dB on
-  drums, 23.7 dB on other) because the kernel uses an erf-approximation GELU and
-  threadgroup reductions whose width varies with tensor shape -- and they are not faster
-  (0.783 s fused against 0.776 s unfused, median of five runs). Set
-  `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to re-enable them for benchmarking. The fused and
-  unfused layers expose identical parameter names, so an existing converted cache loads
+- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. They had a
+  missing threadgroup barrier that let one simdgroup clobber the group mean
+  before another had read it — worst at the small `elems_per_group` of the
+  frequency branch. Fixed in 1.4.9: end-to-end SNR went from ~20 dB to
+  **118.2 dB** and relative error from 1.6e-02 to 2.0e-07. They stay off only
+  because they are not *faster*: 1.7331 s against a 1.7270 s control at a 1.76%
+  noise floor. Set `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to enable them. Fused and
+  unfused layers expose identical parameter names, so a converted cache loads
   either way.
 - Added `DEMUCS_MLX_USE_FUSED_GN_GLU` in the first place: these kernels were previously
   wired in unconditionally, so there was no way to rule them out when output looked wrong

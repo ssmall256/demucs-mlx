@@ -22,12 +22,11 @@ from .mlx_layers import (
     GroupNormNCHW,
     GroupNormNCL,
     Identity,
+    _use_fused_gn_glu,
 )
-from .mlx_layers import _use_fused_gn_glu
 from .mlx_utils import MLXStateDictMixin
 from .spec_mlx import CachedSpectralPair
 from .wiener_mlx import wiener
-
 
 
 def pad1d(x: mx.array, paddings: tp.Tuple[int, int], mode: str = "constant", value: float = 0.0):

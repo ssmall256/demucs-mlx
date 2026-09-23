@@ -138,7 +138,10 @@ _HYBRID_THRESHOLD = 32768
 # Each threadgroup handles one (batch, group) pair.
 # Uses simdgroup reductions for mean/variance.
 # GELU = 0.5 * x * (1 + erf(x / sqrt(2)))
-# Metal provides metal::precise::erf() for exact erf.
+# MSL provides no erf in any namespace (metal::erf, erf and
+# metal::precise::erf all fail to compile, with or without
+# <metal_math>), so an approximation is required. A&S 7.1.26 is
+# accurate to ~1.5e-7.
 
 _GROUPNORM_GELU_HEADER = r"""
 // Abramowitz & Stegun approximation of erf, max error ~1.5e-7
@@ -200,6 +203,11 @@ if (wid == 0) {
 }
 threadgroup_barrier(mem_flags::mem_threadgroup);
 float mean = shared_sums[0] / (float)elems_per_group;
+// Every simdgroup reads slot 0 above, and pass 2 below has simdgroup 0 write
+// that same slot. Without this barrier a fast simdgroup can clobber the mean
+// before a lagging one has loaded it, poisoning the whole (batch, group) slab.
+// Widest window at small elems_per_group -- the freq-branch DConv shapes.
+threadgroup_barrier(mem_flags::mem_threadgroup);
 
 // Pass 2: Compute variance
 float local_var = 0.0f;
@@ -368,6 +376,11 @@ if (wid == 0) {
 }
 threadgroup_barrier(mem_flags::mem_threadgroup);
 float mean = shared_sums[0] / (float)elems_per_group;
+// Every simdgroup reads slot 0 above, and pass 2 below has simdgroup 0 write
+// that same slot. Without this barrier a fast simdgroup can clobber the mean
+// before a lagging one has loaded it, poisoning the whole (batch, group) slab.
+// Widest window at small elems_per_group -- the freq-branch DConv shapes.
+threadgroup_barrier(mem_flags::mem_threadgroup);
 
 // Pass 2: Compute variance
 float local_var = 0.0f;

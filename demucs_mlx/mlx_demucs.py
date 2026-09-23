@@ -14,7 +14,7 @@ from functools import lru_cache
 import mlx.core as mx
 import mlx.nn as nn
 
-from .mlx_layers import _use_fused_gn_glu, Conv1dNCL, ConvTranspose1dNCL, Lambda
+from .mlx_layers import Conv1dNCL, ConvTranspose1dNCL, Lambda, _use_fused_gn_glu
 from .mlx_utils import MLXStateDictMixin, center_trim, unfold
 
 # ---------------------------------------------------------------------------
