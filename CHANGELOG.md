@@ -7,6 +7,16 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.10 - 2026-09-23
+
+### Changed
+
+- `mlx-spectro` floor raised to 0.9.3. 0.9.2 fixed a compiled `stft`/`istft`
+  raising `no usable threadgroup size` on a machine with no tuning cache yet --
+  `CachedSpectralPair` was never affected, because `compiled_pair` calls the
+  transform eagerly before compiling, but anyone wrapping this package's
+  transform in their own `mx.compile` was.
+
 ## 1.4.9 - 2026-09-23
 
 ### Fixed
