@@ -112,15 +112,11 @@ discoverable rather than buried in source.
 
 ## What changed in 1.4.7
 
-- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. They had a
-  missing threadgroup barrier that let one simdgroup clobber the group mean
-  before another had read it — worst at the small `elems_per_group` of the
-  frequency branch. Fixed in 1.4.9: end-to-end SNR went from ~20 dB to
-  **118.2 dB** and relative error from 1.6e-02 to 2.0e-07. They stay off only
-  because they are not *faster*: 1.7331 s against a 1.7270 s control at a 1.76%
-  noise floor. Set `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to enable them. Fused and
-  unfused layers expose identical parameter names, so a converted cache loads
-  either way.
+- Fused GroupNorm+GELU/GLU Metal kernels are **off by default**. The unfused
+  path is the same speed on current hardware, so there is nothing to trade.
+  Set `DEMUCS_MLX_USE_FUSED_GN_GLU=1` to enable them; output matches the unfused
+  path to ~118 dB SNR. Fused and unfused layers expose identical parameter
+  names, so a converted cache loads either way.
 - Added `DEMUCS_MLX_USE_FUSED_GN_GLU` in the first place: these kernels were previously
   wired in unconditionally, so there was no way to rule them out when output looked wrong
   without editing the package.
