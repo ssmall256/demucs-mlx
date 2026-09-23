@@ -132,7 +132,8 @@ _HYBRID_THRESHOLD = 32768
 
 
 # ==============================================================================
-# Fused GroupNorm + GELU (erf-based, matching MLX's nn.gelu exactly)
+# Fused GroupNorm + GELU (erf-based, approximating MLX's nn.gelu -- see the
+# A&S note below; it is not exact)
 # ==============================================================================
 # Each threadgroup handles one (batch, group) pair.
 # Uses simdgroup reductions for mean/variance.
@@ -225,7 +226,8 @@ for (uint i = tid; i < elems_per_group; i += tg_size) {
     uint c_global = group_idx * channels_per_group + c_local;
     float val = ((float)x[base + i] - mean) * inv_std;
     val = val * (float)weight[c_global] + (float)bias[c_global];
-    // Exact GELU: 0.5 * x * (1 + erf(x / sqrt(2)))
+    // GELU via the A&S erf approximation above, NOT mx.erf: ~1e-7 from the
+    // unfused path, which calls mx.erf.
     val = 0.5f * val * (1.0f + erf_approx(val * rsqrt2));
     out[base + i] = (T)val;
 }
