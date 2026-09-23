@@ -7,6 +7,11 @@ on:
         description: "Version to publish and verify (for example: 1.2.0rc1)"
         required: true
         type: string
+      allow_existing:
+        description: "Proceed even if this version is already published (makes the upload a no-op)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-testpypi-${{ inputs.version }}
@@ -115,6 +120,41 @@ jobs:
           name: dist-artifacts
           path: dist
 
+      - name: Refuse to silently re-release an existing version
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          ALLOW_EXISTING: ${{ inputs.allow_existing }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          name = "demucs-mlx"
+          version = os.environ["PACKAGE_VERSION"]
+          allow = os.environ.get("ALLOW_EXISTING", "").strip().lower() == "true"
+
+          try:
+              with urllib.request.urlopen(
+                  f"https://test.pypi.org/pypi/{name}/{version}/json", timeout=30
+              ) as response:
+                  json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  print(f"{name} {version} is not on TestPyPI yet; publishing.")
+                  raise SystemExit(0)
+              raise
+
+          if not allow:
+              raise SystemExit(
+                  f"{name} {version} is already on TestPyPI. skip-existing would make "
+                  "this publish a silent no-op, so a changed build would not ship while "
+                  "the run still reported success. Bump the version, or re-dispatch with "
+                  "allow_existing=true if a no-op re-run is what you want."
+              )
+          print(f"{name} {version} already on TestPyPI; allow_existing=true, upload is a no-op.")
+          PY
       - name: Publish package distributions to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

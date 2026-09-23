@@ -14,7 +14,13 @@ from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_utils import center_trim
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
-# MLX 0.31.2 corrupts strided scatter-add slices in this overlap-add path.
+# MLX below 0.32.0 corrupts strided (non-leading-axis) slice scatter-add: the
+# Metal slice_update kernel linearizes a 2-D/3-D dispatch grid incorrectly, so
+# `arr.at[..., a:b].add(x)` silently accumulates into aliased cells and the
+# overlap-add output spikes. Fixed in MLX 0.32.0. See
+# https://github.com/ml-explore/mlx/issues/3676 (duplicate of #3477).
+# This package floors MLX at 0.31.2, so the safe path below is always taken and
+# the `.at(...).add(...)` branch is kept only as a reference implementation.
 _USE_SAFE_SLICE_ACCUMULATION = version.parse(mx.__version__) >= version.parse("0.31.2")
 
 

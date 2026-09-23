@@ -87,7 +87,10 @@ jobs:
                   if exc.code != 404 or attempt == 11:
                       raise
                   time.sleep(10)
-          if payload is None or payload["info"]["version"] != version:
+          # Do not compare payload["info"]["version"]: that is a cached "latest"
+          # view of the project and lags behind a just-published release. The
+          # per-version endpoint returning at all is what proves it is there.
+          if payload is None:
               raise SystemExit(f"demucs-mlx {version} is not available on PyPI")
           print(f"Confirmed demucs-mlx {version} on PyPI")
           PY
@@ -113,14 +116,15 @@ jobs:
           source = Path("CHANGELOG.md")
           lines = source.read_text().splitlines()
 
-          # Accept "## 1.4.7", "## v1.4.7" and "## 1.4.7 - 2026-09-22". The old
+          # Accept "## 1.4.7", "## v1.4.7", "## 1.4.7 - 2026-09-22" and
+          # "## [1.4.7] - 2026-09-22". The old
           # parser required the exact line "## v{version}", so the house
           # "## X.Y.Z - DATE" heading style silently failed the release.
           def is_heading(line: str) -> bool:
               if not line.startswith("## "):
                   return False
               token = line[3:].strip().split()[0] if line[3:].strip() else ""
-              return token.lstrip("v") == version
+              return token.strip("[]").lstrip("v") == version
 
           start = next(
               (index + 1 for index, line in enumerate(lines) if is_heading(line)),
