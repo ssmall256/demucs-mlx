@@ -7,6 +7,16 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.11 - 2026-09-23
+
+### Fixed
+
+- `uv.lock` pinned mlx 0.31.2 while mlx-audio-io's sdist, built in an isolated
+  environment that resolves `mlx` on its own, compiled against 0.32.2. `uv sync`
+  therefore produced a binary the runtime could not load, and CI failed with
+  `MLX version mismatch`. The lock now resolves to a consistent pair; the loader
+  error that caught it is working as intended.
+
 ## 1.4.10 - 2026-09-23
 
 ### Changed
