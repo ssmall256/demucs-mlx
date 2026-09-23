@@ -7,6 +7,16 @@ on:
         description: "Version to publish (for example: 1.2.0)"
         required: true
         type: string
+      allow_existing:
+        description: "Proceed even if this version is already published (makes the upload a no-op)"
+        required: false
+        default: false
+        type: boolean
+      skip_rc_check:
+        description: "Publish to PyPI without a matching TestPyPI release candidate"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-pypi-${{ inputs.version }}
@@ -112,6 +122,85 @@ jobs:
           name: dist-artifacts
           path: dist
 
+      - name: Refuse to silently re-release an existing version
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          ALLOW_EXISTING: ${{ inputs.allow_existing }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          name = "demucs-mlx"
+          version = os.environ["PACKAGE_VERSION"]
+          allow = os.environ.get("ALLOW_EXISTING", "").strip().lower() == "true"
+
+          try:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/{name}/{version}/json", timeout=30
+              ) as response:
+                  json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  print(f"{name} {version} is not on PyPI yet; publishing.")
+                  raise SystemExit(0)
+              raise
+
+          if not allow:
+              raise SystemExit(
+                  f"{name} {version} is already on PyPI. skip-existing would make "
+                  "this publish a silent no-op, so a changed build would not ship while "
+                  "the run still reported success. Bump the version, or re-dispatch with "
+                  "allow_existing=true if a no-op re-run is what you want."
+              )
+          print(f"{name} {version} already on PyPI; allow_existing=true, upload is a no-op.")
+          PY
+      - name: Require a TestPyPI release candidate first
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SKIP_RC_CHECK: ${{ inputs.skip_rc_check }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          def base(value):
+              match = re.match(r"^(\d+(?:\.\d+)*)", value.strip())
+              return match.group(1) if match else None
+
+          if os.environ.get("SKIP_RC_CHECK", "").strip().lower() == "true":
+              print("skip_rc_check=true; not requiring a TestPyPI release candidate.")
+              raise SystemExit(0)
+
+          name = "demucs-mlx"
+          target = base(os.environ["PACKAGE_VERSION"])
+
+          try:
+              with urllib.request.urlopen(
+                  f"https://test.pypi.org/pypi/{name}/json", timeout=30
+              ) as response:
+                  releases = json.load(response)["releases"]
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(f"Could not read {name} on TestPyPI: {exc}")
+
+          matches = sorted(
+              candidate
+              for candidate, files in releases.items()
+              if files and base(candidate) == target
+          )
+          if not matches:
+              raise SystemExit(
+                  f"No TestPyPI release for {target}. Releases go TestPyPI -> PyPI -> "
+                  "GitHub; run the TestPyPI workflow first, or re-dispatch with "
+                  "skip_rc_check=true to override."
+              )
+          print(f"TestPyPI has {matches} for {target}.")
+          PY
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
