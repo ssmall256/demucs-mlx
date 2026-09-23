@@ -7,6 +7,21 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.4.12 - 2026-09-23
+
+### Fixed
+
+- README stated that mlx-audio-io did not yet support MLX 0.32 and that the
+  runtime pair was MLX 0.31.2 with mlx-audio-io 1.3.11. Both have been untrue
+  since 1.4.7; the package requires `mlx>=0.31.2,<0.33`. Corrected here and in
+  `docs/platform.md` and `docs/release.md`.
+- The `DEMUCS_MLX_USE_FUSED_GN_GLU` row quoted parity figures from before the
+  kernels were fixed in 1.4.9. It now states the measured behaviour: 118 dB SNR
+  against the unfused path, deterministic run to run, and a wash on speed.
+- Per-version "What changed in" sections replaced with a pointer to this file,
+  which the release workflow already reads. They had stopped at 1.4.7 and
+  disagreed with the changelog.
+
 ## 1.4.11 - 2026-09-23
 
 ### Fixed
