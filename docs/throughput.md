@@ -107,6 +107,31 @@ inside the chosen model. Samples still matched exactly, but same-process pairs
 measured 0.85×, 0.98×, and 1.05× against reconstructing all four model outputs
 (`mq-06a1de`). There was no repeatable speedup, so that extra code was removed.
 
+## Current spectral cost and next bottlenecks
+
+On 2026-09-29, job `mq-c5fc8a` profiled one batch-two, 7.8-second `htdemucs`
+segment with MLX 0.32.3 and the installed `mlx-spectro` 0.9.4. The uninstrumented
+median was **167.35 ms**, and the synchronized component profile was **168.58 ms**.
+The model's `_spec` took **0.34 ms** and `_ispec` **2.44 ms** per segment call.
+Together, they account for about **1.7%** of that segment's wall time. Even a
+zero-cost spectral frontend would save at most about 2.8 ms under this profile.
+
+The hot components were the cross-transformer (**43.13 ms**), final frequency
+decoder (**18.31 ms**), first frequency encoder (**15.17 ms**), final waveform
+decoder (**12.37 ms**), and first waveform encoder (**12.03 ms**). The current
+`nn.MultiHeadAttention` already calls MLX's fast scaled dot-product attention,
+and compiling only the cross-transformer gave little end-to-end gain in the
+earlier experiment. Kernel-level inspection of these encoder and decoder
+stages is a better next step than changing the spectral frontend.
+
+The `CachedSpectralPair` wrapper already uses `mlx-spectro`'s `compiled_pair()`.
+Job `mq-850023` compared it with that same installed package's eager path at
+the actual HTDemucs tensor shapes. The second, warmed pair measured compiled
+versus eager STFT at **0.327 vs 0.382 ms** and ISTFT at **2.416 vs 2.396 ms**.
+Outputs matched exactly. The first compiled measurements were slower, so this
+does not justify changing the wrapper; the warmed paths are effectively tied
+for ISTFT, where almost all spectral time lies.
+
 ## Candidates measured but not adopted
 
 The batch size sweep (`mq-c0e8d4`) compared batches two, four, and eight on 30- and 60-second inputs before the GroupNorm change. At 30 seconds, all warmed times were within 0.018 seconds (0.631–0.649 s). At 60 seconds, batch four sometimes helped, but batch eight ranged from 1.227 to 1.361 seconds versus 1.170–1.201 seconds for batch two. Keeping batch two avoids a regression on longer inputs.
@@ -135,6 +160,8 @@ metalq submit -w --no-env-sync -n htdemucs-model-modes -- python tests/bench_mod
 metalq submit -w --no-env-sync -n ft-single-stem-parity -- python -m pytest -q tests/test_ft_single_stem.py
 metalq submit -w --no-env-sync -n ft-single-stem-benchmark -- python tests/bench_ft_single_stem.py
 metalq submit -w --no-env-sync -n ft-single-stem-cli -- python tests/probe_ft_single_stem_cli.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-current-component-profile -- python tests/profile_htdemucs_components.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-spectro-compiled-vs-eager -- python tests/bench_htdemucs_spectral_paths.py
 ```
 
 All MLX/Metal measurements were submitted through `metalq submit -w`.
