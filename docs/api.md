@@ -28,6 +28,7 @@ for name, audio in stems.items():
 - **split** (`bool`): Whether to split audio into segments. Default `True`.
 - **segment** (`float | None`): Segment length in seconds. Default `None` (uses model default).
 - **batch_size** (`int`): Number of segments to process in parallel. Default `2`.
+- **ane_time_encoder** (`bool`): Offload the first default `htdemucs` waveform convolution to the Neural Engine. Default `False`. Requires the converted asset, macOS, split 7.8-second segments, and batch size 1 or 2. Use `Separator` as a context manager or call `close()` to stop the worker.
 - **progress** (`bool`): Show progress bar. Default `False`.
 
 ### Properties

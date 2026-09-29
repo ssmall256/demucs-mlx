@@ -1,4 +1,4 @@
-"""Experimental Core ML waveform encoder for the default HTDemucs model.
+"""Experimental Core ML first waveform convolution for default HTDemucs.
 
 Conversion uses the restricted official PyTorch loader. Inference needs only
 PyObjC: Core ML runs on a worker while MLX evaluates the spectral branch.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import queue
 import shutil
 import sys
@@ -21,7 +22,7 @@ import numpy as np
 MODEL_NAME = "htdemucs"
 BATCH = 2
 LENGTH = 343_980  # 7.8 seconds at 44.1 kHz, the official training segment.
-OUTPUT_NAMES = ("y0", "y1", "y2", "y3")
+OUTPUT_NAME = "y0"
 
 
 def asset_dir() -> Path:
@@ -29,11 +30,11 @@ def asset_dir() -> Path:
 
 
 def compiled_path() -> Path:
-    return asset_dir() / "htdemucs_time_encoder_b2.mlmodelc"
+    return asset_dir() / "htdemucs_time_conv_b2.mlmodelc"
 
 
 def manifest_path() -> Path:
-    return asset_dir() / "htdemucs_time_encoder_b2.json"
+    return asset_dir() / "htdemucs_time_conv_b2.json"
 
 
 def _cache_identity() -> str:
@@ -50,33 +51,39 @@ def _cache_identity() -> str:
     return digest
 
 
-def _torch_encoder(torch_model):
+def _torch_conv(torch_model):
     import torch
+    import torch.nn.functional as functional
 
-    class TorchWaveformEncoder(torch.nn.Module):
-        def __init__(self, model):
+    class TiledFirstConv(torch.nn.Module):
+        """Normalize globally, then partition one convolution exactly."""
+
+        def __init__(self, conv):
             super().__init__()
-            self.layers = model.tencoder
+            self.conv = conv
 
-        def forward(self, mix):
-            # Match mx.std's population variance, rather than torch.std's
-            # default Bessel correction.
-            mean = mix.mean(dim=(1, 2), keepdim=True)
-            std = mix.std(dim=(1, 2), keepdim=True, unbiased=False)
-            x = (mix - mean) / (1e-5 + std)
-            outputs = []
-            for index, layer in enumerate(self.layers):
-                # The official fixed 7.8 s shapes are divisible by four only
-                # at the first stage. Spell out the three known one-sample
-                # pads so TorchScript does not trace dynamic shape -> int ops,
-                # which Core ML Tools cannot translate for this model.
-                if index:
-                    x = torch.nn.functional.pad(x, (0, 1))
-                x = layer(x)
-                outputs.append(x)
-            return tuple(outputs)
+        def forward(self, x):
+            mean = x.mean(dim=(1, 2), keepdim=True)
+            std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
+            x = (x - mean) / (1e-5 + std)
+            # (343980 + 4 - 8) / 4 + 1 = 85995 = 21 * 4095.
+            # Adjacent tiles overlap by four input samples, so this is exactly
+            # the original padding=2 convolution, including both edges.
+            padded = functional.pad(x, (2, 2))
+            return torch.cat(
+                [
+                    functional.conv1d(
+                        padded[:, :, index * 16_380 : index * 16_380 + 16_384],
+                        self.conv.weight,
+                        self.conv.bias,
+                        stride=4,
+                    )
+                    for index in range(21)
+                ],
+                dim=-1,
+            )
 
-    return TorchWaveformEncoder(torch_model).eval()
+    return TiledFirstConv(torch_model.tencoder[0].conv).eval()
 
 
 def _device_placement(path: Path) -> dict:
@@ -109,9 +116,9 @@ def _device_placement(path: Path) -> dict:
 
 
 def convert() -> dict:
-    """Convert the official default model and verify ANE placement."""
-    if sys.platform != "darwin":
-        raise RuntimeError("The Neural Engine prototype requires macOS")
+    """Convert the first convolution and verify ANE placement."""
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
     try:
         import coremltools as ct
         import torch
@@ -135,14 +142,14 @@ def convert() -> dict:
     if length != LENGTH or torch_model.audio_channels != 2 or len(torch_model.tencoder) != 4:
         raise RuntimeError("Unexpected HTDemucs waveform encoder shape")
 
-    wrapper = _torch_encoder(torch_model)
+    wrapper = _torch_conv(torch_model)
     example = torch.zeros((BATCH, 2, LENGTH), dtype=torch.float32)
     with torch.no_grad():
         traced = torch.jit.trace(wrapper, example, check_trace=False)
     ml = ct.convert(
         traced,
         inputs=[ct.TensorType(name="mix", shape=tuple(example.shape), dtype=np.float32)],
-        outputs=[ct.TensorType(name=name, dtype=np.float16) for name in OUTPUT_NAMES],
+        outputs=[ct.TensorType(name=OUTPUT_NAME, dtype=np.float16)],
         convert_to="mlprogram",
         compute_precision=ct.precision.FLOAT16,
         minimum_deployment_target=ct.target.macOS15,
@@ -163,6 +170,7 @@ def convert() -> dict:
         "model": MODEL_NAME,
         "batch": BATCH,
         "length": LENGTH,
+        "partition": "normalized_tencoder_0_conv_tiled_21",
         "safetensors_sha256": digest,
         "placement": placement,
         "ane_preferred": ane_preferred,
@@ -172,18 +180,18 @@ def convert() -> dict:
     temporary_manifest.replace(manifest_path())
     if not ane_preferred:
         raise RuntimeError(
-            "Core ML converted the encoder, but its compute plan chose CPU for "
+            "Core ML converted the convolution, but its compute plan chose CPU for "
             f"every operation. Diagnostic assets are at {target}; placement: {placement}"
         )
     return manifest
 
 
-class WaveformEncoder:
+class WaveformConv:
     """One Core ML prediction at a time on a PyObjC worker thread."""
 
     def __init__(self):
-        if sys.platform != "darwin":
-            raise RuntimeError("The Neural Engine prototype requires macOS")
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
         try:
             import CoreML
             import Foundation
@@ -193,7 +201,7 @@ class WaveformEncoder:
         self.path = compiled_path()
         if not self.path.is_dir() or not manifest_path().is_file():
             raise FileNotFoundError(
-                "Converted waveform encoder missing; run "
+                "Converted waveform convolution missing; run "
                 "`python -m demucs_mlx.ane convert` first"
             )
         manifest = json.loads(manifest_path().read_text())
@@ -201,9 +209,12 @@ class WaveformEncoder:
             manifest.get("model") != MODEL_NAME
             or manifest.get("batch") != BATCH
             or manifest.get("length") != LENGTH
+            or manifest.get("partition") != "normalized_tencoder_0_conv_tiled_21"
             or manifest.get("safetensors_sha256") != _cache_identity()
         ):
-            raise RuntimeError("Core ML encoder does not match the validated MLX weights")
+            raise RuntimeError("Core ML convolution does not match the validated MLX weights")
+        if not manifest.get("ane_preferred"):
+            raise RuntimeError("Core ML convolution asset has no Neural Engine placement")
         self.placement = manifest["placement"]
         self._coreml = CoreML
         config = CoreML.MLModelConfiguration.alloc().init()
@@ -224,7 +235,7 @@ class WaveformEncoder:
 
     def submit(self, mix: np.ndarray) -> Future:
         if mix.ndim != 3 or mix.shape[1:] != (2, LENGTH) or mix.shape[0] not in (1, 2):
-            raise ValueError(f"ANE encoder expects (1 or 2, 2, {LENGTH}), got {mix.shape}")
+            raise ValueError(f"ANE convolution expects (1 or 2, 2, {LENGTH}), got {mix.shape}")
         data = np.ascontiguousarray(mix, dtype=np.float32)
         future: Future = Future()
         self._jobs.put((data, future))
@@ -250,7 +261,7 @@ class WaveformEncoder:
             except BaseException as exc:
                 future.set_exception(exc)
 
-    def _predict(self, data: np.ndarray) -> tuple[np.ndarray, ...]:
+    def _predict(self, data: np.ndarray) -> np.ndarray:
         coreml = self._coreml
         count = len(data)
         if count == 1:
@@ -273,33 +284,30 @@ class WaveformEncoder:
         result, error = self.model.predictionFromFeatures_error_(features, None)
         if result is None:
             raise RuntimeError(f"Core ML prediction failed: {error}")
-        outputs = []
-        for name in OUTPUT_NAMES:
-            y = result.featureValueForName_(name).multiArrayValue()
-            dtype = {
-                coreml.MLMultiArrayDataTypeFloat16: np.float16,
-                coreml.MLMultiArrayDataTypeFloat32: np.float32,
-            }[y.dataType()]
-            shape = tuple(int(s) for s in y.shape())
-            strides = tuple(int(s) for s in y.strides())
-            held = {}
+        y = result.featureValueForName_(OUTPUT_NAME).multiArrayValue()
+        dtype = {
+            coreml.MLMultiArrayDataTypeFloat16: np.float16,
+            coreml.MLMultiArrayDataTypeFloat32: np.float32,
+        }[y.dataType()]
+        shape = tuple(int(s) for s in y.shape())
+        strides = tuple(int(s) for s in y.strides())
+        held = {}
 
-            def grab(raw, size):
-                held["flat"] = np.frombuffer(
-                    raw, dtype=dtype, count=size // np.dtype(dtype).itemsize
-                ).copy()
+        def grab(raw, size):
+            held["flat"] = np.frombuffer(
+                raw, dtype=dtype, count=size // np.dtype(dtype).itemsize
+            ).copy()
 
-            y.getBytesWithHandler_(grab)
-            flat = held["flat"]
-            view = np.lib.stride_tricks.as_strided(
-                flat, shape, [stride * flat.itemsize for stride in strides]
-            )
-            outputs.append(np.ascontiguousarray(view[:count]))
-        return tuple(outputs)
+        y.getBytesWithHandler_(grab)
+        flat = held["flat"]
+        view = np.lib.stride_tricks.as_strided(
+            flat, shape, [stride * flat.itemsize for stride in strides]
+        )
+        return np.ascontiguousarray(view[:count])
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Experimental HTDemucs Neural Engine encoder")
+    parser = argparse.ArgumentParser(description="Experimental HTDemucs Neural Engine convolution")
     parser.add_argument("command", choices=["convert", "placement"])
     args = parser.parse_args(argv)
     if args.command == "convert":
