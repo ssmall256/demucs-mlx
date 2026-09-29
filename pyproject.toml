@@ -28,6 +28,7 @@ dependencies = [
 dev = [
   "build",
   "pyright",
+  "pytest",
   "ruff",
 ]
 
