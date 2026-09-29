@@ -168,10 +168,41 @@ invalidation when weights change (`mq-99527c`). The fine-tuned drums and bass
 CLI paths, six-source model, and ANE worker parity probe also passed with this
 default (`mq-08183a`, `mq-037b8c`, `mq-0b4e1c`).
 
-The remaining largest single component is the cross-transformer. Further work
-should inspect its attention kernels and memory movement, then the DConv
-GroupNorm and GLU traffic. Reusing the old custom fused GroupNorm kernels is
-not justified by their earlier fidelity and throughput results.
+The remaining largest single component is the cross-transformer; the follow-up
+below tests its attention dispatch and memory layout. Reusing the old custom
+fused GroupNorm kernels is not justified by their earlier fidelity and
+throughput results.
+
+## Cross-transformer follow-up: no runtime change
+
+The 2026-09-29 submodule profile (`mq-afc36c`) measured frequency tokens
+`(2, 2688, 512)` and waveform tokens `(2, 1344, 512)`. Frequency self-attention
+took about **3.8–3.9 ms** in each of three layers; cross-attention took about
+**2.2–2.3 ms** in each direction at each of two cross layers. The feed-forward
+linear projections took roughly **1 ms** each on the frequency branch. These
+are synchronized component times, not additive production times.
+
+The installed MLX 0.32.3 `nn.MultiHeadAttention` already calls
+`mx.fast.scaled_dot_product_attention`. At real Q/K/V shapes, forcing its fused
+kernel produced identical values and effectively the same times as its default
+dispatch (`mq-dacb53`). Making Q/K/V contiguous first was slower in all four
+attention cases (`mq-d0f2eb`). Compiling each complete transformer layer gave
+**42.27 vs 41.65 ms** eager/compiled, only about **1%** (`mq-8a6fd8`);
+compiling each attention module alone gave **47.33 vs 47.12 ms**, a tie
+(`mq-18f561`). The earlier whole-transformer compile attempt was similarly
+small. Regenerating the deterministic waveform positional embedding took
+**0.279 ms** per segment (`mq-2e173d`), too little to prioritize caching.
+
+Casting only projected Q/K/V to FP16 before attention lowered individual SDPA
+times modestly (`mq-e693f8`). In complete separation, however, alternating
+FP32/FP16-attention runs measured **0.510/0.503 and 0.503/0.502 s** at 30 seconds
+and **0.919/0.912 and 0.972/0.942 s** at 60 seconds. Minimum complete-stem SNR
+was **73.03–73.51 dB**, with peak error up to **1.93e-5** (`mq-844ad5`). That
+small and variable speedup does not justify the output change, so FP32
+attention remains the default. Further gains here would require a materially
+better attention implementation or a larger independent subgraph that can run
+concurrently on another device; these local layout and compile changes did not
+provide one.
 
 ## Candidates measured but not adopted
 
@@ -210,6 +241,12 @@ metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-compiled-dconv-e2e 
 metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-default-dconv-e2e -- python tests/bench_dconv_default_e2e.py
 metalq submit -w --no-env-sync --queue-exclusive -n ft-drums-bass-cli-parity -- python tests/probe_ft_single_stem_cli.py
 metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-6s-compiled-dconv-parity -- python tests/probe_compiled_dconv_6s.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-cross-transformer-profile -- python tests/profile_htdemucs_hotspots.py --detail transformer
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-attention-probe -- python tests/bench_cross_transformer_attention.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-transformer-layer-compile -- python tests/bench_cross_transformer_layers.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-attention-compile -- python tests/bench_cross_transformer_attn_compile.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-position-encoding -- python tests/bench_transformer_positional.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-half-attention-e2e -- python tests/bench_attention_fp16_e2e.py
 ```
 
 All MLX/Metal measurements were submitted through `metalq submit -w`.
