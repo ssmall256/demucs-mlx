@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from demucs_mlx.ane import WaveformConv
+from demucs_mlx.ane import WaveformConv, WaveformTail
 from demucs_mlx.api import Separator
 from demucs_mlx.separate import main
 
@@ -35,6 +35,9 @@ def main_test():
         missing = Path(directory) / "missing.mlmodelc"
         with patch("demucs_mlx.ane.compiled_path", return_value=missing):
             raises(WaveformConv, "Converted waveform convolution missing")
+        with patch("demucs_mlx.ane.tail_compiled_path", return_value=missing):
+            raises(WaveformTail, "Converted waveform tail missing")
+    raises(lambda: WaveformConv(tile_outputs=100), "Supported ANE tile output lengths")
     print("test_ane_errors.py: OK")
 
 
