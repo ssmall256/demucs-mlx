@@ -8,6 +8,7 @@ Optimized and Corrected:
 from __future__ import annotations
 
 import math
+import os
 import typing as tp
 from functools import lru_cache
 
@@ -391,6 +392,9 @@ class DConv(nn.Module):
         self.channels = channels
         self.compress = compress
         self.depth = abs(depth)
+        self._compile_inference = not (attn or lstm)
+        self._compiled_layers = None
+        self._compiled_signatures = None
         dilate = depth > 0
 
         def norm_fn(d: int) -> nn.Module:
@@ -439,9 +443,54 @@ class DConv(nn.Module):
             self.layers.append(nn.Sequential(*mods))
 
     def __call__(self, x: mx.array) -> mx.array:
-        for layer in self.layers:
+        layers = self.layers
+        compile_enabled = os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1").strip().lower()
+        if (
+            not self.training
+            and self._compile_inference
+            and compile_enabled not in {"0", "false", "no", "off"}
+        ):
+            signatures = tuple(_dconv_block_signature(layer) for layer in layers)
+            if self._compiled_signatures != signatures:
+                previous = self._compiled_layers or []
+                self._compiled_layers = [
+                    previous[index]
+                    if self._compiled_signatures is not None
+                    and index < len(previous)
+                    and self._compiled_signatures[index] == signature
+                    else _compile_dconv_block(layer)
+                    for index, (layer, signature) in enumerate(zip(layers, signatures))
+                ]
+                self._compiled_signatures = signatures
+            layers = self._compiled_layers
+        for layer in layers:
             x = x + layer(x)
         return x
+
+
+def _compile_dconv_block(block: nn.Module):
+    """Keep compiled graphs outside the parameter tree of an inference block."""
+
+    def forward(value):
+        return block(value)
+
+    return mx.compile(forward)
+
+
+def _dconv_block_signature(block: nn.Module) -> tuple[int, ...]:
+    """Invalidate captured weights when an inference-only block is edited."""
+    modules = (
+        block.layers[0].conv,
+        block.layers[1],
+        block.layers[3].conv,
+        block.layers[4],
+        block.layers[6],
+    )
+    return (id(block),) + tuple(
+        id(getattr(module, name, None))
+        for module in modules
+        for name in ("weight", "bias", "scale")
+    )
 
 
 class DemucsMLX(MLXStateDictMixin, nn.Module):

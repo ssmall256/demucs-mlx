@@ -102,6 +102,10 @@ shift parity, skipped model execution, default behavior, and argument errors
 (`mq-f55f77`). The real CLI wrote only a 44,100-frame `vocals.wav` from a
 one-second input (`mq-a52142`).
 
+The same option accepts `--stem drums` and `--stem bass`. A real CLI probe with
+fixed shifts wrote exactly one file for each request, byte-identical to that
+stem in the complete fine-tuned bag (`mq-08183a`).
+
 A further attempt sliced the requested source before spectral reconstruction
 inside the chosen model. Samples still matched exactly, but same-process pairs
 measured 0.85×, 0.98×, and 1.05× against reconstructing all four model outputs
@@ -131,6 +135,43 @@ versus eager STFT at **0.327 vs 0.382 ms** and ISTFT at **2.416 vs 2.396 ms**.
 Outputs matched exactly. The first compiled measurements were slower, so this
 does not justify changing the wrapper; the warmed paths are effectively tied
 for ISTFT, where almost all spectral time lies.
+
+## Adopted: compiled DConv inference blocks
+
+The submodule profile (`mq-e16027`, `mq-2ce4ed`) found that the first waveform
+and frequency encoders and final decoders each spend roughly **10–11 ms** of a
+synchronized batch-two segment in their `DConv` modules. Their second
+GroupNorm takes about **2.6–3.9 ms** per block. Submodule synchronization
+changes scheduling, so these numbers identify hot operations rather than
+additive production costs. The transformer still spends about **3.8 ms** in
+each frequency self-attention layer and about **2.2 ms** in each cross-attention
+layer; MLX already uses fast scaled dot-product attention.
+
+Compiling a `DConv` block without changing its weights or operations reduced
+the isolated frequency block from **5.635 to 4.431 ms** and waveform block from
+**5.434 to 4.873 ms**, with exact output equality (`mq-8254a8`). A full-model
+prototype compiling every block measured **0.523 vs 0.487 s** at 30 seconds and
+**0.956 vs 0.891 s** at 60 seconds, averaged over two warmed alternating pairs
+(`mq-4aace0`). All four stems matched the eager path exactly.
+
+The shipped path now compiles simple `DConv` blocks during inference after
+weights load. It keeps the module parameter tree unchanged and recompiles a
+block if a weight array is replaced. `DEMUCS_MLX_COMPILE_DCONV=0` restores eager
+execution. With that cache check in place, a paired production-code run measured
+**0.904 vs 0.853 s** at 30 seconds and **1.717 vs 1.664 s** at 60 seconds in its
+second pair (`mq-2910a7`), again with exact stem equality. Host activity raised
+both timings relative to the earlier prototype job; compare paths within each
+job. Independent fresh-process first passes took **0.555 s** compiled and
+**0.740 s** eager (`mq-579a47`, `mq-f0b9b1`), so this measurement showed no
+startup penalty. Unit tests cover parity, parameter-tree stability, and cache
+invalidation when weights change (`mq-99527c`). The fine-tuned drums and bass
+CLI paths, six-source model, and ANE worker parity probe also passed with this
+default (`mq-08183a`, `mq-037b8c`, `mq-0b4e1c`).
+
+The remaining largest single component is the cross-transformer. Further work
+should inspect its attention kernels and memory movement, then the DConv
+GroupNorm and GLU traffic. Reusing the old custom fused GroupNorm kernels is
+not justified by their earlier fidelity and throughput results.
 
 ## Candidates measured but not adopted
 
@@ -162,6 +203,13 @@ metalq submit -w --no-env-sync -n ft-single-stem-benchmark -- python tests/bench
 metalq submit -w --no-env-sync -n ft-single-stem-cli -- python tests/probe_ft_single_stem_cli.py
 metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-current-component-profile -- python tests/profile_htdemucs_components.py
 metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-spectro-compiled-vs-eager -- python tests/bench_htdemucs_spectral_paths.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-transformer-hotspots -- python tests/profile_htdemucs_hotspots.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-dconv-hotspots -- python tests/profile_htdemucs_hotspots.py --detail dconv
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-compiled-dconv-block -- python tests/bench_dconv_compiled.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-compiled-dconv-e2e -- python tests/bench_compiled_dconv_e2e.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-default-dconv-e2e -- python tests/bench_dconv_default_e2e.py
+metalq submit -w --no-env-sync --queue-exclusive -n ft-drums-bass-cli-parity -- python tests/probe_ft_single_stem_cli.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-6s-compiled-dconv-parity -- python tests/probe_compiled_dconv_6s.py
 ```
 
 All MLX/Metal measurements were submitted through `metalq submit -w`.

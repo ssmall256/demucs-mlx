@@ -63,6 +63,7 @@ Options:
 -b, --batch-size    Batch size (default: 2)
 --write-workers     Concurrent writer threads (default: 1)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
+--stem              For htdemucs_ft, compute only drums, bass, other, or vocals
 --list-models       List available models
 -v, --verbose       Verbose logging
 ```
@@ -110,6 +111,7 @@ discoverable rather than buried in source.
 | Variable | Default | Effect |
 |---|---|---|
 | `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Runs GroupNorm+GELU/GLU through fused Metal kernels instead of the pure-MLX path. Output agrees with the unfused path to 118 dB SNR and is deterministic run to run. Timing is a wash on current hardware — 1.7331 s against a 1.7270 s control at a 1.76% noise floor — so the unfused path stays the default. Both paths expose identical parameter names, so an existing converted cache loads either way. |
+| `DEMUCS_MLX_COMPILE_DCONV` | `1` (on) | Compile DConv inference blocks after weights load. Set to `0` to use the eager path. Complete stems matched exactly in paired measurements; see [throughput experiments](docs/throughput.md). |
 
 ## Version history
 
@@ -127,7 +129,7 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 
 *Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
-The current development branch reduces warmed 30- and 60-second `htdemucs` separation time by about **10%** through faster GroupNorm, then another **7–8%** through phased decoder convolutions. See the [reproducible throughput measurements](docs/throughput.md); these use synthetic input and should not be compared directly with the track benchmark above.
+The current development branch reduces warmed 30- and 60-second `htdemucs` separation time by about **10%** through faster GroupNorm, then another **7–8%** through phased decoder convolutions. Compiled DConv inference blocks add a further **3–7%** in paired runs. See the [reproducible throughput measurements](docs/throughput.md); these use synthetic input and should not be compared directly with the track benchmark above.
 
 ## Models
 
@@ -144,6 +146,8 @@ For a single fine-tuned stem, `--stem` runs only its specialized model:
 
 ```bash
 demucs-mlx -n htdemucs_ft --stem vocals song.wav
+demucs-mlx -n htdemucs_ft --stem drums song.wav
+demucs-mlx -n htdemucs_ft --stem bass song.wav
 ```
 
 The full four-stem `htdemucs_ft` run remains available by omitting `--stem`.
