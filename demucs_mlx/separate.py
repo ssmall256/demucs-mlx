@@ -175,12 +175,15 @@ def _separate_one(
     batch_size: int,
     verbose: bool,
     writer: _AsyncWriter,
+    stem: tp.Optional[str] = None,
 ) -> None:
     import mlx.core as mx
 
     from .apply_mlx import apply_model
 
-    total_steps = 4 + len(model.sources)
+    source_names = (stem,) if stem is not None else model.sources
+    source_index = model.sources.index(stem) if stem is not None else None
+    total_steps = 4 + len(source_names)
     stage = tqdm(total=total_steps, desc=path.name, unit="step", leave=False) if verbose else None
     try:
         if verbose:
@@ -201,13 +204,14 @@ def _separate_one(
             segment=segment,
             batch_size=batch_size,
             progress=verbose,
+            source_index=source_index,
         )
         mx.eval(estimates)
         if stage is not None:
             stage.update(1)
         track_out = out_dir / path.stem
         track_out.mkdir(parents=True, exist_ok=True)
-        stem_paths = [track_out / f"{s}.wav" for s in model.sources]
+        stem_paths = [track_out / f"{s}.wav" for s in source_names]
         if stage is not None:
             stage.update(1)
 
@@ -232,6 +236,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("tracks", nargs="*", help="Audio files to separate")
     parser.add_argument("-n", "--name", default="htdemucs", help="Model name")
+    parser.add_argument(
+        "--stem",
+        default=None,
+        help="For htdemucs_ft, compute only this stem (drums, bass, other, or vocals)",
+    )
     parser.add_argument("-o", "--out", default="separated", help="Output directory")
     parser.add_argument("--segment", type=float, default=None, help="Segment length in seconds")
     parser.add_argument("--overlap", type=float, default=0.25, help="Overlap ratio")
@@ -291,6 +300,8 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     if args.name not in MLX_MODEL_REGISTRY:
         known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
         raise SystemExit(f"Unknown model '{args.name}'. Available: {known}")
+    if args.stem is not None and args.name != "htdemucs_ft":
+        raise SystemExit("--stem acceleration only supports htdemucs_ft")
     if args.ane_time_encoder:
         if args.name != "htdemucs":
             raise SystemExit("--ane-time-encoder only supports the default htdemucs model")
@@ -305,6 +316,8 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     model = get_mlx_model(args.name)
     if hasattr(model, "eval"):
         model.eval()
+    if args.stem is not None and args.stem not in model.sources:
+        raise SystemExit(f"Unknown stem {args.stem!r}; available: {', '.join(model.sources)}")
     ane_worker = None
     if args.ane_time_encoder:
         from .ane import WaveformConv
@@ -336,6 +349,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
                 batch_size=args.batch_size,
                 verbose=args.verbose,
                 writer=writer,
+                stem=args.stem,
             )
     finally:
         writer.close()

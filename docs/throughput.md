@@ -41,9 +41,7 @@ Both the default GPU CLI (`mq-14c598`) and ANE CLI (`mq-a1b4ce`) wrote four 1,32
 | Delay split accumulation evaluation (`mq-254650`) | Interval four helped slightly at 30 seconds but slowed 60-second runs. | Keep one evaluation per batch. |
 | Half precision (`mq-246936`, `mq-f4bf29`, `mq-286806`) | The full model was slower end to end and gave 38–42 dB minimum stem SNR. Half precision only in the transformer gave 66–67 dB SNR without a repeatable speedup. | Keep FP32. |
 
-## Candidates measured but not adopted
-
-### Other HTDemucs modes and ANE overlap
+## Other HTDemucs modes and ANE overlap
 
 Job `mq-1a6a9b` measured the three HTDemucs modes on deterministic synthetic stereo
 at 44.1 kHz, with the same default inference settings used above. Times include
@@ -60,9 +58,9 @@ The last `htdemucs_ft` run coincided with about five seconds of another MetalQ
 job under parallel dispatch, so the two 60-second timings differ. The completed
 run remains a valid measurement; the first run and both 30-second runs show the
 roughly fourfold cost of this mode. The official fine-tuned bag uses one model
-per stem, with one-hot source weights. Thus a requested single stem could skip
-three complete model passes while preserving that stem's result, provided the
-same shift offset is used. The six-source model is one shared model and is only
+per stem, with one-hot source weights. The selected-stem path below skips
+three complete model passes while preserving that stem's result and shift
+offset. The six-source model is one shared model and is only
 about 6–7% slower than default here.
 
 The existing ANE path already submits its first waveform convolution before
@@ -82,6 +80,29 @@ those keys only in optional training metadata, while keeping constructor and
 state mappings string-keyed; security tests cover the accepted and rejected
 cases. The six-source and fine-tuned checkpoints converted into verified safe
 MLX caches for this measurement.
+
+## Adopted: fine-tuned single-stem acceleration
+
+`htdemucs_ft` has one model per source. The `stem=` API argument and `--stem`
+CLI option now run only the matching model. Skipped models' shift draws are
+consumed to preserve the selected model's offsets and the RNG state. A
+deterministic full-bag comparison (`mq-d06f30`) found exactly matching vocal
+samples at both tested input lengths: infinite SNR and zero peak error.
+
+| Input | Full four stems | Vocals only | Speedup |
+|---:|---:|---:|---:|
+| 30 s, pair 1 | 2.102 s | 0.532 s | **3.95×** |
+| 30 s, pair 2 | 2.092 s | 0.528 s | **3.96×** |
+| 60 s, pair 1 | 3.864 s | 0.957 s | **4.04×** |
+| 60 s, pair 2 | 3.839 s | 0.960 s | **4.00×** |
+
+The pairs alternated full and selected ordering. Input and settings match the
+mode benchmark above. Tests cover all four source names, seeded and unseeded
+shift parity, skipped model execution, default behavior, and argument errors
+(`mq-f55f77`). The real CLI wrote only a 44,100-frame `vocals.wav` from a
+one-second input (`mq-a52142`).
+
+## Candidates measured but not adopted
 
 The batch size sweep (`mq-c0e8d4`) compared batches two, four, and eight on 30- and 60-second inputs before the GroupNorm change. At 30 seconds, all warmed times were within 0.018 seconds (0.631–0.649 s). At 60 seconds, batch four sometimes helped, but batch eight ranged from 1.227 to 1.361 seconds versus 1.170–1.201 seconds for batch two. Keeping batch two avoids a regression on longer inputs.
 
@@ -106,6 +127,9 @@ metalq submit -w --no-env-sync -n waveform-deconv-shapes -- python tests/bench_p
 metalq submit -w --no-env-sync -n frequency-deconv-shapes -- python tests/bench_phased_frequency_deconv.py
 metalq submit -w --no-env-sync -n phased-wav-parity -- python tests/probe_phased_wav_parity.py --input stereo-44100-pcm16.wav
 metalq submit -w --no-env-sync -n htdemucs-model-modes -- python tests/bench_model_modes.py
+metalq submit -w --no-env-sync -n ft-single-stem-parity -- python -m pytest -q tests/test_ft_single_stem.py
+metalq submit -w --no-env-sync -n ft-single-stem-benchmark -- python tests/bench_ft_single_stem.py
+metalq submit -w --no-env-sync -n ft-single-stem-cli -- python tests/probe_ft_single_stem_cli.py
 ```
 
 All MLX/Metal measurements were submitted through `metalq submit -w`.
