@@ -19,7 +19,7 @@ class _AsyncWriter:
     def __init__(
         self,
         maxsize: int = 4,
-        workers: int = 1,
+        workers: int = 2,
         *,
         clip: str = "rescale",
         bits_per_sample: int = 16,
@@ -258,7 +258,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BATCH_SIZE,
         help=f"Batch size for inference (default: {DEFAULT_BATCH_SIZE})",
     )
-    parser.add_argument("--write-workers", type=int, default=1,
+    parser.add_argument("--write-workers", type=int, default=2,
                         help="Number of concurrent audio writer threads")
     parser.add_argument("--prefetch-tracks", type=int, default=2,
                         help="Number of prefetched decoded tracks")

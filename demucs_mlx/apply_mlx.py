@@ -3,9 +3,11 @@ MLX inference apply_model equivalent.
 """
 from __future__ import annotations
 
+import os
 import random
 import typing as tp
 import warnings
+import weakref
 
 import mlx.core as mx
 from packaging import version
@@ -14,6 +16,46 @@ from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_utils import center_trim
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
+_COMPILED_FORWARDS: dict[int, tuple[weakref.ReferenceType, dict]] = {}
+
+
+def _forward(model: tp.Any, x: mx.array) -> mx.array:
+    """Optionally compile repeated GPU forward shapes after an eager first call."""
+    enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    if not enabled or getattr(model, "_ane_time_conv", None) is not None:
+        return model(x)
+
+    model_id = id(model)
+    slot = _COMPILED_FORWARDS.get(model_id)
+    if slot is None or slot[0]() is not model:
+        def forget(_ref, *, key=model_id):
+            current = _COMPILED_FORWARDS.get(key)
+            if current is not None and current[0] is _ref:
+                _COMPILED_FORWARDS.pop(key, None)
+
+        try:
+            ref = weakref.ref(model, forget)
+        except TypeError:
+            return model(x)
+        slot = (ref, {})
+        _COMPILED_FORWARDS[model_id] = slot
+    ref, per_shape = slot
+    key = (tuple(x.shape), str(x.dtype), os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1"))
+    if key not in per_shape:
+        # Spectral tuning may evaluate candidate kernels, which cannot happen
+        # inside an MLX compile trace. This useful first call populates it.
+        per_shape[key] = None
+        return model(x)
+
+    compiled = per_shape[key]
+    if compiled is None:
+        compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
+        per_shape[key] = compiled
+    return compiled(x)
+
+
 # MLX below 0.32.0 corrupts strided (non-leading-axis) slice scatter-add: the
 # Metal slice_update kernel linearizes a 2-D/3-D dispatch grid incorrectly, so
 # `arr.at[..., a:b].add(x)` silently accumulates into aliased cells and the
@@ -237,7 +279,7 @@ def apply_model(
             batch_tensor_flat = batch_tensor.reshape(b_seg * b_audio, channels, length)
 
             # 3. Run Model (Standard 3D Input)
-            batch_out_flat = model(batch_tensor_flat)
+            batch_out_flat = _forward(model, batch_tensor_flat)
 
             # 4. Unflatten: (Batch_Segments, Audio_Batch, Sources, Channels, Time)
             _, sources, out_c, out_t = batch_out_flat.shape
@@ -297,7 +339,7 @@ def apply_model(
                     padded = chunk.padded(valid_len)
 
                     # FIX: Pass 'padded' directly. It is already (Batch, Channels, Time).
-                    chunk_out = model(padded)
+                    chunk_out = _forward(model, padded)
                     chunk_out = center_trim(chunk_out, this_chunk_len)
 
                     end = offset + this_chunk_len
@@ -328,5 +370,5 @@ def apply_model(
     # No split path
     valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length
     padded_mix = mix_chunk.padded(valid_length)
-    out = model(padded_mix)
+    out = _forward(model, padded_mix)
     return center_trim(out, length)

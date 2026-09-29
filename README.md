@@ -61,7 +61,7 @@ Options:
 --seed              Optional RNG seed for reproducible shifts (default: none)
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: 2)
---write-workers     Concurrent writer threads (default: 1)
+--write-workers     Concurrent writer threads (default: 2)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
 --list-models       List available models
@@ -105,13 +105,15 @@ discoverable rather than buried in source.
 | `-b` / `--batch-size` | `2` | Fastest and smallest. Larger batches thrash memory on 16-36 GB Macs. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
+| `--write-workers` | `2` | Encodes stems concurrently while the next track runs. |
 
 ### Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
 | `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Runs GroupNorm+GELU/GLU through fused Metal kernels instead of the pure-MLX path. Output agrees with the unfused path to 118 dB SNR and is deterministic run to run. Timing is a wash on current hardware — 1.7331 s against a 1.7270 s control at a 1.76% noise floor — so the unfused path stays the default. Both paths expose identical parameter names, so an existing converted cache loads either way. |
-| `DEMUCS_MLX_COMPILE_DCONV` | `1` (on) | Compile DConv inference blocks after weights load. Set to `0` to use the eager path. Complete stems matched exactly in paired measurements; see [throughput experiments](docs/throughput.md). |
+| `DEMUCS_MLX_COMPILE_FORWARD` | `0` (off) | Opt in to compiling repeated GPU forward shapes after their first eager call. Set `1` together with `DEMUCS_MLX_COMPILE_DCONV=0` for the measured warmed-throughput path. The ANE path always bypasses this compilation. See [throughput experiments](docs/throughput.md). |
+| `DEMUCS_MLX_COMPILE_DCONV` | `1` (on) | Compile DConv inference blocks after weights load. Set to `0` to use eager blocks, including when opting into whole-forward compilation. |
 
 ## Version history
 

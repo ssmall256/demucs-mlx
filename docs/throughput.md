@@ -1,5 +1,56 @@
 # HTDemucs throughput experiments
 
+## Measured: deferred whole-forward compilation for repeated workloads
+
+The `mlx-audio-separator` copy found a gain from shape-keyed whole-model
+compilation. The earlier standalone attempt compiled before spectral tuning and
+paid a 2.783-second cold call. The new path uses the first segment batch at a
+shape eagerly, then compiles that same shape on its next use. It is available
+with `DEMUCS_MLX_COMPILE_FORWARD=1`; the ANE worker is always excluded. Set
+`DEMUCS_MLX_COMPILE_DCONV=0` alongside it to let the outer graph include eager
+DConv blocks. The existing DConv-compiled GPU path remains the default.
+
+On an M4 Max with MLX 0.32.3, jobs `mq-cde326`, `mq-ac321f` and `mq-6dd101`
+compared separate loaded models
+with the former DConv-compiled path, outer compilation alone, and both
+compilation layers. Inputs were deterministic 30- and 60-second stereo at
+44.1 kHz; one shift, 25% overlap, batch two and seed 481. Timings include all
+four materialized stems and exclude model load and file I/O. Warmed paired
+means for **outer compilation alone** were:
+
+| Job | 30 s less wall time | 60 s less wall time |
+|---|---:|---:|
+| `mq-ac321f` | 9.8% | 5.7% |
+| `mq-6dd101` (60 s first) | 4.5% | 3.5% |
+
+The first 30-second separation in `mq-ac321f` took 0.533 s on the default path
+and 0.557 s with deferred outer compilation. The first 60-second separation in
+`mq-6dd101` took 0.937 and 0.984 s respectively. A separate fresh-process
+AB/BA comparison (`mq-e6e797`) varied between 4.0% slower and 16.4% faster
+at 30 seconds, and between 1.7% slower and 10.5% faster at 60 seconds. An
+auto-on prototype with DConv suppression (`mq-0ff024`) regressed each of its
+four fresh-process runs, so it was removed. The available opt-in path keeps
+the repeatable warmed gain without changing first-track latency by default.
+Stem SNR against the default path was at least 103.2 dB, with peak error at
+most 1.25e-7. Compiling both outer forward and DConv did not consistently
+beat the outer-only arm.
+
+Other modes also retain their previously measured paths by default. A
+30-second mode probe (`mq-503eb1`) found first-run outer compilation
+slower for `htdemucs_6s` (0.871 vs 0.581 s) and essentially tied for a
+fine-tuned bass stem (0.500 vs 0.495 s); fidelity remained at least 93.8 dB.
+The opt-in switch permits experiments with these modes. The writer default is
+now two threads, matching the larger separator's I/O choice while retaining
+`--write-workers` for tuning.
+
+Reproduce the inference comparisons through MetalQ:
+
+```bash
+metalq submit -w --no-env-sync --queue-exclusive -n demucs-outer-compile -- python tests/bench_outer_compile_current.py
+metalq submit -w --no-env-sync --queue-exclusive -n demucs-outer-cold -- python tests/bench_outer_compile_cold.py
+metalq submit -w --no-env-sync --queue-exclusive -n demucs-outer-modes -- python tests/probe_outer_compile_modes.py
+```
+
 ## Total of today's adopted GPU changes
 
 Job `mq-862345` switched **all three** adopted GPU changes together in one
@@ -62,7 +113,7 @@ Both the default GPU CLI (`mq-14c598`) and ANE CLI (`mq-a1b4ce`) wrote four 1,32
 | Treat frequency 2D convolutions as 1D (`mq-c83a38`) | Forward calls were about equal; frequency transposed convolutions became 3–12× slower. | Keep the 2D path; phase decomposition above addresses transposed convolutions. |
 | Approximate GELU (`mq-5cf39c`) | Complete-stem SNR fell to about 41 dB, and the fast approximation to 8–10 dB, without a consistent wall-time win. | Keep exact GELU. |
 | Fused attention projections (`mq-62577f`) | Stem output was identical, but complete-separation timing did not improve consistently. | Keep MLX's attention implementation. |
-| Compile the whole HTDemucs segment (`mq-9cc448`) | Cold call cost 2.783 s; warmed median was 375.78 ms eager versus 360.77 ms compiled. | The startup cost outweighs this gain for ordinary tracks. |
+| Compile the whole HTDemucs segment eagerly (`mq-9cc448`) | Cold call cost 2.783 s; warmed median was 375.78 ms eager versus 360.77 ms compiled. | This eager attempt was rejected; the deferred strategy measured above remains opt-in. |
 | Delay split accumulation evaluation (`mq-254650`) | Interval four helped slightly at 30 seconds but slowed 60-second runs. | Keep one evaluation per batch. |
 | Half precision (`mq-246936`, `mq-f4bf29`, `mq-286806`) | The full model was slower end to end and gave 38–42 dB minimum stem SNR. Half precision only in the transformer gave 66–67 dB SNR without a repeatable speedup. | Keep FP32. |
 
@@ -179,7 +230,7 @@ prototype compiling every block measured **0.523 vs 0.487 s** at 30 seconds and
 **0.956 vs 0.891 s** at 60 seconds, averaged over two warmed alternating pairs
 (`mq-4aace0`). All four stems matched the eager path exactly.
 
-The shipped path now compiles simple `DConv` blocks during inference after
+The shipped path compiles simple `DConv` blocks during inference after
 weights load. It keeps the module parameter tree unchanged and recompiles a
 block if a weight array is replaced. `DEMUCS_MLX_COMPILE_DCONV=0` restores eager
 execution. With that cache check in place, a paired production-code run measured
