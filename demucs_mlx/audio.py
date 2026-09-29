@@ -5,6 +5,32 @@ import mlx.core as mx
 import numpy as np
 
 
+def load_audio(path, *, sr: int, dtype: str = "float32"):
+    """Load through mlx-audio-io with a useful error for a broken native binding."""
+    import mlx_audio_io as mac
+
+    try:
+        return mac.load(str(path), sr=sr, dtype=dtype)
+    except TypeError as exc:
+        if "Unable to convert function return value to a Python type" not in str(exc):
+            raise
+        try:
+            from mlx_audio_io._native_loader import load_build_info
+
+            build = load_build_info()
+            pairing = (
+                f" (built for MLX {build.get('build_mlx_version')} with "
+                f"nanobind {build.get('build_nanobind_version')})"
+            )
+        except (AttributeError, ImportError, OSError, TypeError, ValueError):
+            pairing = ""
+        raise RuntimeError(
+            "mlx-audio-io could not return an MLX array"
+            f"{pairing}. Rebuild it with the nanobind version used by the "
+            "installed MLX runtime."
+        ) from exc
+
+
 def prevent_clip(wav, mode='rescale'):
     """Prevent clipping in torch tensors."""
     import torch
