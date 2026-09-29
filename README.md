@@ -127,7 +127,7 @@ Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with defa
 
 *Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
 
-The current development branch also reduces warmed 30- and 60-second `htdemucs` separation time by about **10%** through faster GroupNorm. See the [reproducible throughput measurements](docs/throughput.md); these use synthetic input and should not be compared directly with the track benchmark above.
+The current development branch reduces warmed 30- and 60-second `htdemucs` separation time by about **10%** through faster GroupNorm, then another **7–8%** through phased decoder convolutions. See the [reproducible throughput measurements](docs/throughput.md); these use synthetic input and should not be compared directly with the track benchmark above.
 
 ## Models
 
