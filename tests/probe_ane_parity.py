@@ -1,4 +1,4 @@
-"""Compare the compiled Core ML encoder with the default MLX encoder.
+"""Compare the ANE convolution with the default MLX convolution.
 
 Run through metalq as shown in docs/ane-prototype.md.
 """
@@ -6,7 +6,7 @@ Run through metalq as shown in docs/ane-prototype.md.
 import mlx.core as mx
 import numpy as np
 
-from demucs_mlx.ane import LENGTH, WaveformEncoder
+from demucs_mlx.ane import LENGTH, WaveformConv
 from demucs_mlx.model_converter import get_mlx_model
 
 
@@ -19,14 +19,11 @@ def main():
     x = (x - mx.mean(x, axis=(1, 2), keepdims=True)) / (
         1e-5 + mx.std(x, axis=(1, 2), keepdims=True)
     )
-    reference = []
-    for layer in model.tencoder:
-        x = layer(x)
-        reference.append(x)
-    mx.eval(*reference)
-    reference = [np.asarray(value) for value in reference]
+    reference = model.tencoder[0].conv(x)
+    mx.eval(reference)
+    reference = np.asarray(reference)
 
-    backend = WaveformEncoder()
+    backend = WaveformConv()
     try:
         try:
             backend.submit(np.empty((2, 2, 1), dtype=np.float32))
@@ -41,22 +38,16 @@ def main():
     if backend._worker.is_alive():
         raise AssertionError("Core ML worker remained alive after close")
 
-    print("## Core ML waveform encoder parity")
+    print("## Core ML waveform convolution parity")
     print(f"**Compute plan:** `{backend.placement}`")
-    print("| Stage | SNR | Peak error | Mean error |")
-    print("|---|---:|---:|---:|")
-    for index, (want, got, one) in enumerate(zip(reference, converted, final_one)):
-        if got.shape != want.shape or one.shape != want[:1].shape:
-            raise AssertionError(f"Unexpected output shape at stage {index}")
-        want = want.astype(np.float64)
-        got = got.astype(np.float64)
-        error = want - got
-        snr = 10 * np.log10(np.sum(want * want) / max(np.sum(error * error), 1e-30))
-        print(
-            f"| {index} | **{snr:.2f} dB** | {np.max(np.abs(error)):.6g} "
-            f"| {np.mean(np.abs(error)):.6g} |"
-        )
-        np.testing.assert_allclose(one, converted[index][:1], rtol=0, atol=0)
+    if converted.shape != reference.shape or final_one.shape != reference[:1].shape:
+        raise AssertionError("Unexpected convolution output shape")
+    want = reference.astype(np.float64)
+    got = converted.astype(np.float64)
+    error = want - got
+    snr = 10 * np.log10(np.sum(want * want) / max(np.sum(error * error), 1e-30))
+    print(f"**SNR:** {snr:.2f} dB; **peak error:** {np.max(np.abs(error)):.6g}")
+    np.testing.assert_allclose(final_one, converted[:1], rtol=0, atol=0)
     print("> Batch-one padding preserves output values.")
 
 

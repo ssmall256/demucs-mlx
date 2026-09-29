@@ -62,6 +62,7 @@ Options:
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: 2)
 --write-workers     Concurrent writer threads (default: 1)
+--ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --list-models       List available models
 -v, --verbose       Verbose logging
 ```
@@ -183,7 +184,7 @@ globals; it is not a resource-exhaustion sandbox for otherwise valid tensor file
 - API reference: `docs/api.md`
 - Development workflow: `docs/development.md`
 - Platform notes: `docs/platform.md`
-- Neural Engine waveform encoder experiment: `docs/ane-prototype.md`
+- Neural Engine waveform prototype and measured results: `docs/ane-prototype.md`
 
 ## License
 

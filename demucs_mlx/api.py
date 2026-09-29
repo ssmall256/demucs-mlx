@@ -23,6 +23,7 @@ class Separator:
         batch_size: int = DEFAULT_BATCH_SIZE,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
+        ane_time_encoder: bool = False,
     ):
         if model not in MLX_MODEL_REGISTRY:
             known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
@@ -41,6 +42,15 @@ class Separator:
             raise ValueError("segment must be > 0 when provided.")
         if int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
+        if ane_time_encoder:
+            if model != "htdemucs":
+                raise ValueError("ANE waveform path only supports the default htdemucs model")
+            if segment is not None and float(segment) != 7.8:
+                raise ValueError("ANE waveform path requires 7.8-second segments")
+            if not split:
+                raise ValueError("ANE waveform path requires split=True")
+            if int(batch_size) not in (1, 2):
+                raise ValueError("ANE waveform path requires batch_size 1 or 2")
         if seed is not None:
             try:
                 seed = int(seed)
@@ -57,11 +67,37 @@ class Separator:
         self.progress = progress
         self.callback = callback
         self.callback_arg = callback_arg
+        self._ane_requested = bool(ane_time_encoder)
+        self._closed = False
 
         from .model_converter import get_mlx_model
         self._model = get_mlx_model(model)
         if hasattr(self._model, "eval"):
             self._model.eval()
+        self._ane_worker = None
+        if ane_time_encoder:
+            from .ane import WaveformConv
+
+            if len(self._model.models) != 1:
+                raise RuntimeError("ANE waveform path requires a single HTDemucs model")
+            self._ane_worker = WaveformConv()
+            self._model.models[0]._ane_time_conv = self._ane_worker
+
+    def close(self) -> None:
+        self._closed = True
+        if self._ane_worker is not None:
+            self._ane_worker.close()
+            if getattr(self._model.models[0], "_ane_time_conv", None) is self._ane_worker:
+                del self._model.models[0]._ane_time_conv
+            self._ane_worker = None
+
+    def __enter__(self):
+        if self._closed:
+            raise RuntimeError("Separator is closed")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     @property
     def samplerate(self) -> int:
@@ -153,6 +189,8 @@ class Separator:
         *,
         return_mx: bool = False,
     ) -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
+        if self._ane_requested and self._closed:
+            raise RuntimeError("ANE Separator is closed")
         import mlx.core as mx
         import numpy as np
 

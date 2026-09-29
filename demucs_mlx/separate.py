@@ -253,6 +253,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-tracks", type=int, default=2,
                         help="Number of prefetched decoded tracks")
     parser.add_argument("--no-split", action="store_true", help="Disable chunked inference")
+    parser.add_argument(
+        "--ane-time-encoder", action="store_true",
+        help="run the first HTDemucs waveform convolution on the Neural Engine",
+    )
     parser.add_argument("--list-models", action="store_true", help="List available models")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
@@ -286,6 +290,13 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     if args.name not in MLX_MODEL_REGISTRY:
         known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
         raise SystemExit(f"Unknown model '{args.name}'. Available: {known}")
+    if args.ane_time_encoder:
+        if args.name != "htdemucs":
+            raise SystemExit("--ane-time-encoder only supports the default htdemucs model")
+        if args.no_split or (args.segment is not None and args.segment != 7.8):
+            raise SystemExit("--ane-time-encoder requires split 7.8-second segments")
+        if args.batch_size not in (1, 2):
+            raise SystemExit("--ane-time-encoder requires --batch-size 1 or 2")
 
     if args.verbose:
         print(f"Loading MLX model: {args.name}")
@@ -293,6 +304,14 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     model = get_mlx_model(args.name)
     if hasattr(model, "eval"):
         model.eval()
+    ane_worker = None
+    if args.ane_time_encoder:
+        from .ane import WaveformConv
+
+        if len(model.models) != 1:
+            raise SystemExit("--ane-time-encoder requires a single HTDemucs model")
+        ane_worker = WaveformConv()
+        model.models[0]._ane_time_conv = ane_worker
 
     out_dir = Path(args.out)
     writer = _AsyncWriter(maxsize=max(8, args.write_workers * 4), workers=args.write_workers)
@@ -319,6 +338,16 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
             )
     finally:
         writer.close()
+        if ane_worker is not None:
+            ane_worker.close()
+            if args.verbose:
+                print(
+                    "Neural Engine waveform convolution: "
+                    f"{ane_worker.predictions} predictions, "
+                    f"{ane_worker.busy_seconds:.3f}s execution, "
+                    f"{ane_worker.wait_seconds:.3f}s wait, "
+                    f"{ane_worker.transfer_seconds:.3f}s transfer"
+                )
 
     return 0
 

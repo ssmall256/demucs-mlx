@@ -4,10 +4,12 @@ MLX implementation of HTDemucs (inference-only).
 from __future__ import annotations
 
 import math
+import time
 import typing as tp
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from .mlx_hdemucs import HDecLayer, HEncLayer, MultiWrap, ScaledEmbedding, pad1d
 from .mlx_layers import Conv1dNCL
@@ -417,6 +419,19 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             if mix.shape[-1] < training_length:
                 length_pre_pad = mix.shape[-1]
                 mix = mx.pad(mix, [(0, 0), (0, 0), (0, training_length - length_pre_pad)])
+        ane_conv = getattr(self, "_ane_time_conv", None)
+        ane_future = None
+        if ane_conv is not None:
+            from .ane import LENGTH
+
+            if mix.shape[-1] != LENGTH or mix.shape[0] not in (1, 2):
+                raise ValueError(
+                    f"ANE waveform path requires 1 or 2 segments of {LENGTH} samples; "
+                    f"got {tuple(mix.shape)}"
+                )
+            transfer_start = time.perf_counter()
+            ane_future = ane_conv.submit(np.asarray(mix))
+            ane_conv.transfer_seconds += time.perf_counter() - transfer_start
         z = self._spec(mix)
         mag = self._magnitude(z)
         x = mag
@@ -438,7 +453,27 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         for idx, encode in enumerate(self.encoder):
             lengths.append(x.shape[-1])
             inject = None
-            if idx < len(self.tencoder):
+            if ane_future is not None and idx == 3:
+                # First evaluate the independent spectral stages on the GPU.
+                mx.eval(x)
+                wait_start = time.perf_counter()
+                conv = ane_future.result()
+                ane_conv.wait_seconds += time.perf_counter() - wait_start
+                transfer_start = time.perf_counter()
+                conv_mx = mx.array(conv)
+                mx.eval(conv_mx)
+                ane_conv.transfer_seconds += time.perf_counter() - transfer_start
+                xt = conv_mx
+                for time_idx, tenc in enumerate(self.tencoder):
+                    lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
+                    xt = tenc(xt, precomputed_conv=conv_mx) if time_idx == 0 else tenc(xt)
+                    if not tenc.empty:
+                        saved_t.append(xt)
+                    else:
+                        inject = xt
+            elif ane_future is not None and idx < 3:
+                pass
+            elif idx < len(self.tencoder):
                 lengths_t.append(xt.shape[-1])
                 tenc = self.tencoder[idx]
                 xt = tenc(xt)
