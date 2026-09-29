@@ -420,7 +420,10 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 length_pre_pad = mix.shape[-1]
                 mix = mx.pad(mix, [(0, 0), (0, 0), (0, training_length - length_pre_pad)])
         ane_conv = getattr(self, "_ane_time_conv", None)
+        # Private diagnostic hook: the current FP16 tail fails stem fidelity.
+        ane_tail = getattr(self, "_ane_time_tail", None)
         ane_future = None
+        ane_tail_future = None
         if ane_conv is not None:
             from .ane import LENGTH
 
@@ -456,21 +459,33 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             if ane_future is not None and idx == 3:
                 # First evaluate the independent spectral stages on the GPU.
                 mx.eval(x)
-                wait_start = time.perf_counter()
-                conv = ane_future.result()
-                ane_conv.wait_seconds += time.perf_counter() - wait_start
-                transfer_start = time.perf_counter()
-                conv_mx = mx.array(conv)
-                mx.eval(conv_mx)
-                ane_conv.transfer_seconds += time.perf_counter() - transfer_start
-                xt = conv_mx
-                for time_idx, tenc in enumerate(self.tencoder):
-                    lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
-                    xt = tenc(xt, precomputed_conv=conv_mx) if time_idx == 0 else tenc(xt)
-                    if not tenc.empty:
-                        saved_t.append(xt)
-                    else:
-                        inject = xt
+                if ane_tail_future is not None:
+                    wait_start = time.perf_counter()
+                    tail_outputs = ane_tail_future.result()
+                    ane_tail.wait_seconds += time.perf_counter() - wait_start
+                    transfer_start = time.perf_counter()
+                    tail_mx = tuple(mx.array(value) for value in tail_outputs)
+                    mx.eval(*tail_mx)
+                    ane_tail.transfer_seconds += time.perf_counter() - transfer_start
+                    lengths_t.extend((85_995, 21_499, 5_375))
+                    saved_t.extend(tail_mx)
+                    xt = tail_mx[-1]
+                else:
+                    wait_start = time.perf_counter()
+                    conv = ane_future.result()
+                    ane_conv.wait_seconds += time.perf_counter() - wait_start
+                    transfer_start = time.perf_counter()
+                    conv_mx = mx.array(conv)
+                    mx.eval(conv_mx)
+                    ane_conv.transfer_seconds += time.perf_counter() - transfer_start
+                    xt = conv_mx
+                    for time_idx, tenc in enumerate(self.tencoder):
+                        lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
+                        xt = tenc(xt, precomputed_conv=conv_mx) if time_idx == 0 else tenc(xt)
+                        if not tenc.empty:
+                            saved_t.append(xt)
+                        else:
+                            inject = xt
             elif ane_future is not None and idx < 3:
                 pass
             elif idx < len(self.tencoder):
@@ -487,6 +502,23 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 emb = self.freq_emb(frs).transpose(1, 0)[None, :, :, None]
                 x = x + self.freq_emb_scale * emb
             saved.append(x)
+            if ane_future is not None and ane_tail is not None and idx == 0:
+                # Finish stage 0 on MLX, then submit the full-length later
+                # stages while the spectral branch continues on the GPU.
+                mx.eval(x)
+                wait_start = time.perf_counter()
+                conv = ane_future.result()
+                ane_conv.wait_seconds += time.perf_counter() - wait_start
+                transfer_start = time.perf_counter()
+                conv_mx = mx.array(conv)
+                mx.eval(conv_mx)
+                ane_conv.transfer_seconds += time.perf_counter() - transfer_start
+                lengths_t.append(LENGTH)
+                xt = self.tencoder[0](xt, precomputed_conv=conv_mx)
+                saved_t.append(xt)
+                transfer_start = time.perf_counter()
+                ane_tail_future = ane_tail.submit(np.asarray(xt))
+                ane_tail.transfer_seconds += time.perf_counter() - transfer_start
 
         if self.crosstransformer:
             if self.bottom_channels:

@@ -23,18 +23,40 @@ MODEL_NAME = "htdemucs"
 BATCH = 2
 LENGTH = 343_980  # 7.8 seconds at 44.1 kHz, the official training segment.
 OUTPUT_NAME = "y0"
+DEFAULT_TILE_OUTPUTS = 12285
+SUPPORTED_TILE_OUTPUTS = (4095, 12285)
+
+
+def _tile_count(tile_outputs: int) -> int:
+    if tile_outputs not in SUPPORTED_TILE_OUTPUTS:
+        raise ValueError(f"Supported ANE tile output lengths: {SUPPORTED_TILE_OUTPUTS}")
+    return 85_995 // tile_outputs
+
+
+def _asset_name(tile_outputs: int) -> str:
+    count = _tile_count(tile_outputs)
+    suffix = "" if tile_outputs == 4095 else f"_t{count}"
+    return f"htdemucs_time_conv_b2{suffix}"
 
 
 def asset_dir() -> Path:
     return Path.home() / ".cache" / "demucs-mlx" / "ane"
 
 
-def compiled_path() -> Path:
-    return asset_dir() / "htdemucs_time_conv_b2.mlmodelc"
+def compiled_path(tile_outputs: int = DEFAULT_TILE_OUTPUTS) -> Path:
+    return asset_dir() / f"{_asset_name(tile_outputs)}.mlmodelc"
 
 
-def manifest_path() -> Path:
-    return asset_dir() / "htdemucs_time_conv_b2.json"
+def manifest_path(tile_outputs: int = DEFAULT_TILE_OUTPUTS) -> Path:
+    return asset_dir() / f"{_asset_name(tile_outputs)}.json"
+
+
+def tail_compiled_path() -> Path:
+    return asset_dir() / "htdemucs_time_tail_b2.mlmodelc"
+
+
+def tail_manifest_path() -> Path:
+    return asset_dir() / "htdemucs_time_tail_b2.json"
 
 
 def _cache_identity() -> str:
@@ -51,9 +73,13 @@ def _cache_identity() -> str:
     return digest
 
 
-def _torch_conv(torch_model):
+def _torch_conv(torch_model, tile_outputs: int = DEFAULT_TILE_OUTPUTS):
     import torch
     import torch.nn.functional as functional
+
+    tile_count = _tile_count(tile_outputs)
+    tile_step = 4 * tile_outputs
+    tile_width = tile_step + 4
 
     class TiledFirstConv(torch.nn.Module):
         """Normalize globally, then partition one convolution exactly."""
@@ -66,24 +92,44 @@ def _torch_conv(torch_model):
             mean = x.mean(dim=(1, 2), keepdim=True)
             std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
             x = (x - mean) / (1e-5 + std)
-            # (343980 + 4 - 8) / 4 + 1 = 85995 = 21 * 4095.
-            # Adjacent tiles overlap by four input samples, so this is exactly
-            # the original padding=2 convolution, including both edges.
+            # (343980 + 4 - 8) / 4 + 1 = 85995. Adjacent tiles overlap
+            # by four samples, preserving the original padded convolution.
             padded = functional.pad(x, (2, 2))
             return torch.cat(
                 [
                     functional.conv1d(
-                        padded[:, :, index * 16_380 : index * 16_380 + 16_384],
+                        padded[:, :, index * tile_step : index * tile_step + tile_width],
                         self.conv.weight,
                         self.conv.bias,
                         stride=4,
                     )
-                    for index in range(21)
+                    for index in range(tile_count)
                 ],
                 dim=-1,
             )
 
     return TiledFirstConv(torch_model.tencoder[0].conv).eval()
+
+
+def _torch_tail(torch_model):
+    import torch
+    import torch.nn.functional as functional
+
+    class Tail(torch.nn.Module):
+        def __init__(self, layers):
+            super().__init__()
+            self.layers = torch.nn.ModuleList(layers)
+
+        def forward(self, x):
+            outputs = []
+            for layer in self.layers:
+                # Each full-length input is one sample short of a multiple
+                # of four. HEncLayer's dynamic pad is equivalent to this.
+                x = layer(functional.pad(x, (0, 1)))
+                outputs.append(x)
+            return tuple(outputs)
+
+    return Tail(torch_model.tencoder[1:]).eval()
 
 
 def _device_placement(path: Path) -> dict:
@@ -115,8 +161,81 @@ def _device_placement(path: Path) -> dict:
     return {"operations": counts, "estimated_cost": weights}
 
 
-def convert() -> dict:
+def convert(tile_outputs: int = DEFAULT_TILE_OUTPUTS) -> dict:
     """Convert the first convolution and verify ANE placement."""
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
+    try:
+        import coremltools as ct
+        import torch
+        from demucs.apply import BagOfModels
+    except ImportError as exc:
+        raise RuntimeError(
+            "Conversion needs coremltools 9, PyTorch, and Demucs; install the "
+            "ane-convert extra"
+        ) from exc
+
+    tile_count = _tile_count(tile_outputs)
+    digest = _cache_identity()
+    from .secure_demucs import get_restricted_demucs_model
+
+    restricted = get_restricted_demucs_model(MODEL_NAME)
+    source = restricted.model
+    models = source.models if isinstance(source, BagOfModels) else [source]
+    if len(models) != 1 or type(models[0]).__name__ != "HTDemucs":
+        raise RuntimeError("Expected one official HTDemucs model")
+    torch_model = models[0].eval()
+    length = int(torch_model.segment * torch_model.samplerate)
+    if length != LENGTH or torch_model.audio_channels != 2 or len(torch_model.tencoder) != 4:
+        raise RuntimeError("Unexpected HTDemucs waveform encoder shape")
+
+    wrapper = _torch_conv(torch_model, tile_outputs)
+    example = torch.zeros((BATCH, 2, LENGTH), dtype=torch.float32)
+    with torch.no_grad():
+        traced = torch.jit.trace(wrapper, example, check_trace=False)
+    ml = ct.convert(
+        traced,
+        inputs=[ct.TensorType(name="mix", shape=tuple(example.shape), dtype=np.float32)],
+        outputs=[ct.TensorType(name=OUTPUT_NAME, dtype=np.float16)],
+        convert_to="mlprogram",
+        compute_precision=ct.precision.FLOAT16,
+        minimum_deployment_target=ct.target.macOS15,
+        compute_units=ct.ComputeUnit.CPU_AND_NE,
+    )
+    target = compiled_path(tile_outputs)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    package = target.with_suffix(".mlpackage")
+    ml.save(str(package))
+    built = Path(ct.models.utils.compile_model(str(package)))
+    placement = _device_placement(built)
+    manifest_path(tile_outputs).unlink(missing_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(built, target)
+    ane_preferred = any("NeuralEngine" in device for device in placement["operations"])
+    manifest = {
+        "model": MODEL_NAME,
+        "batch": BATCH,
+        "length": LENGTH,
+        "partition": f"normalized_tencoder_0_conv_tiled_{tile_count}",
+        "tile_outputs": tile_outputs,
+        "safetensors_sha256": digest,
+        "placement": placement,
+        "ane_preferred": ane_preferred,
+    }
+    temporary_manifest = manifest_path(tile_outputs).with_suffix(".json.tmp")
+    temporary_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    temporary_manifest.replace(manifest_path(tile_outputs))
+    if not ane_preferred:
+        raise RuntimeError(
+            "Core ML converted the convolution, but its compute plan chose CPU for "
+            f"every operation. Diagnostic assets are at {target}; placement: {placement}"
+        )
+    return manifest
+
+
+def convert_tail() -> dict:
+    """Convert the remaining full-length waveform stages and verify placement."""
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
     try:
@@ -138,30 +257,32 @@ def convert() -> dict:
     if len(models) != 1 or type(models[0]).__name__ != "HTDemucs":
         raise RuntimeError("Expected one official HTDemucs model")
     torch_model = models[0].eval()
-    length = int(torch_model.segment * torch_model.samplerate)
-    if length != LENGTH or torch_model.audio_channels != 2 or len(torch_model.tencoder) != 4:
+    if (
+        int(torch_model.segment * torch_model.samplerate) != LENGTH
+        or torch_model.audio_channels != 2
+        or len(torch_model.tencoder) != 4
+    ):
         raise RuntimeError("Unexpected HTDemucs waveform encoder shape")
 
-    wrapper = _torch_conv(torch_model)
-    example = torch.zeros((BATCH, 2, LENGTH), dtype=torch.float32)
+    example = torch.zeros((BATCH, 48, 85_995), dtype=torch.float32)
     with torch.no_grad():
-        traced = torch.jit.trace(wrapper, example, check_trace=False)
+        traced = torch.jit.trace(_torch_tail(torch_model), example, check_trace=False)
     ml = ct.convert(
         traced,
-        inputs=[ct.TensorType(name="mix", shape=tuple(example.shape), dtype=np.float32)],
-        outputs=[ct.TensorType(name=OUTPUT_NAME, dtype=np.float16)],
+        inputs=[ct.TensorType(name="conv0", shape=tuple(example.shape), dtype=np.float32)],
+        outputs=[ct.TensorType(name=f"y{index}", dtype=np.float16) for index in (1, 2, 3)],
         convert_to="mlprogram",
         compute_precision=ct.precision.FLOAT16,
         minimum_deployment_target=ct.target.macOS15,
         compute_units=ct.ComputeUnit.CPU_AND_NE,
     )
-    target = compiled_path()
+    target = tail_compiled_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     package = target.with_suffix(".mlpackage")
     ml.save(str(package))
     built = Path(ct.models.utils.compile_model(str(package)))
     placement = _device_placement(built)
-    manifest_path().unlink(missing_ok=True)
+    tail_manifest_path().unlink(missing_ok=True)
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(built, target)
@@ -169,19 +290,19 @@ def convert() -> dict:
     manifest = {
         "model": MODEL_NAME,
         "batch": BATCH,
-        "length": LENGTH,
-        "partition": "normalized_tencoder_0_conv_tiled_21",
+        "input_shape": list(example.shape),
+        "partition": "tencoder_1_3_full",
         "safetensors_sha256": digest,
         "placement": placement,
         "ane_preferred": ane_preferred,
     }
-    temporary_manifest = manifest_path().with_suffix(".json.tmp")
+    temporary_manifest = tail_manifest_path().with_suffix(".json.tmp")
     temporary_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
-    temporary_manifest.replace(manifest_path())
+    temporary_manifest.replace(tail_manifest_path())
     if not ane_preferred:
         raise RuntimeError(
-            "Core ML converted the convolution, but its compute plan chose CPU for "
-            f"every operation. Diagnostic assets are at {target}; placement: {placement}"
+            "Core ML converted the waveform tail, but its compute plan chose CPU. "
+            f"Diagnostic assets are at {target}; placement: {placement}"
         )
     return manifest
 
@@ -189,7 +310,31 @@ def convert() -> dict:
 class WaveformConv:
     """One Core ML prediction at a time on a PyObjC worker thread."""
 
-    def __init__(self):
+    def __init__(self, tile_outputs: int = DEFAULT_TILE_OUTPUTS):
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
+        tile_count = _tile_count(tile_outputs)
+        self.path = compiled_path(tile_outputs)
+        if not self.path.is_dir() or not manifest_path(tile_outputs).is_file():
+            raise FileNotFoundError(
+                "Converted waveform convolution missing; run "
+                "`python -m demucs_mlx.ane convert` first"
+            )
+        manifest = json.loads(manifest_path(tile_outputs).read_text())
+        if (
+            manifest.get("model") != MODEL_NAME
+            or manifest.get("batch") != BATCH
+            or manifest.get("length") != LENGTH
+            or manifest.get("partition") != f"normalized_tencoder_0_conv_tiled_{tile_count}"
+            or manifest.get("tile_outputs", 4095) != tile_outputs
+            or manifest.get("safetensors_sha256") != _cache_identity()
+        ):
+            raise RuntimeError("Core ML convolution does not match the validated MLX weights")
+        if not manifest.get("ane_preferred"):
+            raise RuntimeError("Core ML convolution asset has no Neural Engine placement")
+        self._init_coreml(manifest["placement"], "mix", (OUTPUT_NAME,))
+
+    def _init_coreml(self, placement: dict, input_name: str, output_names: tuple[str, ...]):
         if sys.platform != "darwin" or platform.machine() != "arm64":
             raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
         try:
@@ -198,24 +343,9 @@ class WaveformConv:
         except ImportError as exc:
             raise RuntimeError("Install demucs-mlx[ane] for the Core ML runtime") from exc
 
-        self.path = compiled_path()
-        if not self.path.is_dir() or not manifest_path().is_file():
-            raise FileNotFoundError(
-                "Converted waveform convolution missing; run "
-                "`python -m demucs_mlx.ane convert` first"
-            )
-        manifest = json.loads(manifest_path().read_text())
-        if (
-            manifest.get("model") != MODEL_NAME
-            or manifest.get("batch") != BATCH
-            or manifest.get("length") != LENGTH
-            or manifest.get("partition") != "normalized_tencoder_0_conv_tiled_21"
-            or manifest.get("safetensors_sha256") != _cache_identity()
-        ):
-            raise RuntimeError("Core ML convolution does not match the validated MLX weights")
-        if not manifest.get("ane_preferred"):
-            raise RuntimeError("Core ML convolution asset has no Neural Engine placement")
-        self.placement = manifest["placement"]
+        self.placement = placement
+        self._input_name = input_name
+        self._output_names = output_names
         self._coreml = CoreML
         config = CoreML.MLModelConfiguration.alloc().init()
         config.setComputeUnits_(CoreML.MLComputeUnitsCPUAndNeuralEngine)
@@ -236,6 +366,9 @@ class WaveformConv:
     def submit(self, mix: np.ndarray) -> Future:
         if mix.ndim != 3 or mix.shape[1:] != (2, LENGTH) or mix.shape[0] not in (1, 2):
             raise ValueError(f"ANE convolution expects (1 or 2, 2, {LENGTH}), got {mix.shape}")
+        return self._submit(mix)
+
+    def _submit(self, mix: np.ndarray) -> Future:
         data = np.ascontiguousarray(mix, dtype=np.float32)
         future: Future = Future()
         self._jobs.put((data, future))
@@ -261,7 +394,7 @@ class WaveformConv:
             except BaseException as exc:
                 future.set_exception(exc)
 
-    def _predict(self, data: np.ndarray) -> np.ndarray:
+    def _predict(self, data: np.ndarray):
         coreml = self._coreml
         count = len(data)
         if count == 1:
@@ -277,43 +410,86 @@ class WaveformConv:
         if array is None:
             raise RuntimeError(f"Could not create Core ML input array: {error}")
         features, error = coreml.MLDictionaryFeatureProvider.alloc().initWithDictionary_error_(
-            {"mix": coreml.MLFeatureValue.featureValueWithMultiArray_(array)}, None
+            {self._input_name: coreml.MLFeatureValue.featureValueWithMultiArray_(array)}, None
         )
         if features is None:
             raise RuntimeError(f"Could not create Core ML input features: {error}")
         result, error = self.model.predictionFromFeatures_error_(features, None)
         if result is None:
             raise RuntimeError(f"Core ML prediction failed: {error}")
-        y = result.featureValueForName_(OUTPUT_NAME).multiArrayValue()
-        dtype = {
-            coreml.MLMultiArrayDataTypeFloat16: np.float16,
-            coreml.MLMultiArrayDataTypeFloat32: np.float32,
-        }[y.dataType()]
-        shape = tuple(int(s) for s in y.shape())
-        strides = tuple(int(s) for s in y.strides())
-        held = {}
+        outputs = []
+        for name in self._output_names:
+            y = result.featureValueForName_(name).multiArrayValue()
+            dtype = {
+                coreml.MLMultiArrayDataTypeFloat16: np.float16,
+                coreml.MLMultiArrayDataTypeFloat32: np.float32,
+            }[y.dataType()]
+            shape = tuple(int(s) for s in y.shape())
+            strides = tuple(int(s) for s in y.strides())
+            held = {}
 
-        def grab(raw, size):
-            held["flat"] = np.frombuffer(
-                raw, dtype=dtype, count=size // np.dtype(dtype).itemsize
-            ).copy()
+            def grab(raw, size):
+                held["flat"] = np.frombuffer(
+                    raw, dtype=dtype, count=size // np.dtype(dtype).itemsize
+                ).copy()
 
-        y.getBytesWithHandler_(grab)
-        flat = held["flat"]
-        view = np.lib.stride_tricks.as_strided(
-            flat, shape, [stride * flat.itemsize for stride in strides]
-        )
-        return np.ascontiguousarray(view[:count])
+            y.getBytesWithHandler_(grab)
+            flat = held["flat"]
+            view = np.lib.stride_tricks.as_strided(
+                flat, shape, [stride * flat.itemsize for stride in strides]
+            )
+            outputs.append(np.ascontiguousarray(view[:count]))
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+
+
+class WaveformTail(WaveformConv):
+    """The three full-length stages after the first waveform encoder stage."""
+
+    def __init__(self):
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
+        self.path = tail_compiled_path()
+        if not self.path.is_dir() or not tail_manifest_path().is_file():
+            raise FileNotFoundError(
+                "Converted waveform tail missing; run "
+                "`python -m demucs_mlx.ane convert-tail` first"
+            )
+        manifest = json.loads(tail_manifest_path().read_text())
+        if (
+            manifest.get("model") != MODEL_NAME
+            or manifest.get("batch") != BATCH
+            or manifest.get("input_shape") != [BATCH, 48, 85_995]
+            or manifest.get("partition") != "tencoder_1_3_full"
+            or manifest.get("safetensors_sha256") != _cache_identity()
+        ):
+            raise RuntimeError("Core ML waveform tail does not match validated MLX weights")
+        if not manifest.get("ane_preferred"):
+            raise RuntimeError("Core ML waveform tail asset has no Neural Engine placement")
+        self._init_coreml(manifest["placement"], "conv0", ("y1", "y2", "y3"))
+
+    def submit(self, encoded: np.ndarray) -> Future:
+        if encoded.ndim != 3 or encoded.shape[1:] != (48, 85_995) or encoded.shape[0] not in (1, 2):
+            raise ValueError(
+                f"ANE waveform tail expects (1 or 2, 48, 85995), got {encoded.shape}"
+            )
+        return self._submit(encoded)
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Experimental HTDemucs Neural Engine convolution")
-    parser.add_argument("command", choices=["convert", "placement"])
+    parser.add_argument(
+        "command", choices=["convert", "placement", "convert-tail", "placement-tail"]
+    )
+    parser.add_argument("--tile-outputs", type=int, default=DEFAULT_TILE_OUTPUTS)
     args = parser.parse_args(argv)
     if args.command == "convert":
-        print(json.dumps(convert(), indent=2))
+        print(json.dumps(convert(args.tile_outputs), indent=2))
+    elif args.command == "convert-tail":
+        print(json.dumps(convert_tail(), indent=2))
+    elif args.command == "placement":
+        print(json.dumps(_device_placement(compiled_path(args.tile_outputs)), indent=2))
     else:
-        print(json.dumps(_device_placement(compiled_path()), indent=2))
+        print(json.dumps(_device_placement(tail_compiled_path()), indent=2))
     return 0
 
 
