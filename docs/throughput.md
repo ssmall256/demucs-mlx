@@ -43,6 +43,46 @@ Both the default GPU CLI (`mq-14c598`) and ANE CLI (`mq-a1b4ce`) wrote four 1,32
 
 ## Candidates measured but not adopted
 
+### Other HTDemucs modes and ANE overlap
+
+Job `mq-1a6a9b` measured the three HTDemucs modes on deterministic synthetic stereo
+at 44.1 kHz, with the same default inference settings used above. Times include
+`Separator.separate_tensor` and materializing every stem, but exclude model load,
+conversion, and audio file I/O. Each mode had a separate 30-second warm-up.
+
+| Mode | Models | Stems | 30 s runs | 60 s runs |
+|---|---:|---:|---:|---:|
+| `htdemucs` | 1 | 4 | 0.519, 0.513 s | 0.943, 0.940 s |
+| `htdemucs_6s` | 1 | 6 | 0.545, 0.544 s | 1.004, 1.006 s |
+| `htdemucs_ft` | 4 | 4 | 2.114, 2.143 s | 4.064, 5.417 s |
+
+The last `htdemucs_ft` run coincided with about five seconds of another MetalQ
+job under parallel dispatch, so the two 60-second timings differ. The completed
+run remains a valid measurement; the first run and both 30-second runs show the
+roughly fourfold cost of this mode. The official fine-tuned bag uses one model
+per stem, with one-hot source weights. Thus a requested single stem could skip
+three complete model passes while preserving that stem's result, provided the
+same shift offset is used. The six-source model is one shared model and is only
+about 6–7% slower than default here.
+
+The existing ANE path already submits its first waveform convolution before
+the independent spectral encoder runs on the GPU. The join records zero wait
+in the warmed 30- and 60-second runs (`mq-1d6f66`), yet total ANE and GPU
+times are essentially tied. Each of the other modes uses different weights,
+so the validated default ANE asset cannot be reused. Extending the same small
+offload would require one new asset for `htdemucs_6s` or four for
+`htdemucs_ft`, with little expected wall-time benefit. The larger waveform
+tail placed on ANE but failed stem fidelity, as documented in
+[the ANE prototype](ane-prototype.md). A useful next offload would need a
+larger accurate subgraph whose execution can hide behind independent GPU work.
+
+The mode benchmark also found that the restricted official checkpoint loader
+rejected bounded integer keys in `htdemucs_6s` training metadata. It now allows
+those keys only in optional training metadata, while keeping constructor and
+state mappings string-keyed; security tests cover the accepted and rejected
+cases. The six-source and fine-tuned checkpoints converted into verified safe
+MLX caches for this measurement.
+
 The batch size sweep (`mq-c0e8d4`) compared batches two, four, and eight on 30- and 60-second inputs before the GroupNorm change. At 30 seconds, all warmed times were within 0.018 seconds (0.631–0.649 s). At 60 seconds, batch four sometimes helped, but batch eight ranged from 1.227 to 1.361 seconds versus 1.170–1.201 seconds for batch two. Keeping batch two avoids a regression on longer inputs.
 
 The synchronized component profile (`mq-6bb707`) found a 207.56 ms uninstrumented median for one batch-two segment. The cross-transformer took about 44 ms, followed by `decoder.3` at 23 ms and `tdecoder.3` at 21 ms. Component synchronization changes scheduling, so these are bottleneck hints. Compiling only the cross-transformer (`mq-eefbc3`) reduced its median from 44.49 to 43.67 ms, too little to justify changing the default. An identity-model overlap-add probe (`mq-095bc7`) measured only about 2–7 ms, so overlap-add is not the main opportunity.
@@ -65,6 +105,7 @@ metalq submit -w --no-env-sync -n phased-frequency-benchmark -- python tests/ben
 metalq submit -w --no-env-sync -n waveform-deconv-shapes -- python tests/bench_phased_waveform_deconv.py
 metalq submit -w --no-env-sync -n frequency-deconv-shapes -- python tests/bench_phased_frequency_deconv.py
 metalq submit -w --no-env-sync -n phased-wav-parity -- python tests/probe_phased_wav_parity.py --input stereo-44100-pcm16.wav
+metalq submit -w --no-env-sync -n htdemucs-model-modes -- python tests/bench_model_modes.py
 ```
 
 All MLX/Metal measurements were submitted through `metalq submit -w`.
