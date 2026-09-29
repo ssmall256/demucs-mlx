@@ -1,5 +1,30 @@
 # HTDemucs throughput experiments
 
+## Total of today's adopted GPU changes
+
+Job `mq-862345` switched **all three** adopted GPU changes together in one
+loaded default `htdemucs` model: fast GroupNorm, phased decoder convolutions,
+and compiled DConv inference blocks. The comparison path used the previous
+GroupNorm and transposed convolutions with eager DConv. Three alternating
+before/after pairs followed a warm-up for each path and input length. Input
+was deterministic synthetic stereo at 44.1 kHz. Default inference used one
+shift, 25% overlap, segment batch size two, and seed 481. Timings include
+materializing all four stems, but exclude model loading and audio file I/O.
+
+| Input | Before, mean | After, mean | Less wall time | More audio per second | Minimum stem SNR | Peak error |
+|---:|---:|---:|---:|---:|---:|---:|
+| 30 s | 1.930 s | **1.402 s** | **27.4%** | **37.7%** | 102.11 dB | 1.04e-7 |
+| 60 s | 3.809 s | **2.898 s** | **23.9%** | **31.4%** | 103.29 dB | 1.12e-7 |
+
+This job had other-process GPU activity during 40.7% of its wall time; no
+other MetalQ job ran concurrently. Its absolute times are much higher than
+earlier runs, so use the paired comparison to read the change under those
+conditions. The result is approximately **one-quarter less inference time**
+or **one-third more audio throughput**; the three incremental percentages
+below should not be added. The opt-in ANE path remains a throughput tie and
+is not included as an additional gain. The `htdemucs_ft --stem` result is a
+separate, fourfold gain when requesting only one stem rather than all four.
+
 ## Adopted: grouped fast LayerNorm
 
 The default MLX path now computes GroupNorm by flattening each channel group and calling `mx.fast.layer_norm`, then applying the existing per-channel scale and bias. This replaces separate mean, variance, subtraction, and reciprocal-square-root operations in all three GroupNorm classes. The public API and output shapes are unchanged; the ANE option also uses the new normalization in its MLX stages.
@@ -215,6 +240,7 @@ The synchronized component profile (`mq-6bb707`) found a 207.56 ms uninstrumente
 ```bash
 uv sync --frozen --extra dev --extra ane
 metalq submit -w --no-env-sync -n fast-groupnorm-parity -- python -m pytest -q tests/test_fast_groupnorm.py
+metalq submit -w --no-env-sync --queue-exclusive -n htdemucs-total-gpu-improvement -- python tests/bench_combined_throughput.py
 metalq submit -w --no-env-sync -n fast-groupnorm-abba-benchmark -- python tests/bench_fast_groupnorm_e2e.py
 metalq submit -w --no-env-sync -n fast-groupnorm-ane-benchmark -- python tests/bench_ane_waveform.py
 metalq submit -w --no-env-sync -n groupnorm-shape-probe -- python tests/bench_fast_groupnorm.py
