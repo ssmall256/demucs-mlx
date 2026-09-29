@@ -231,9 +231,10 @@ class Separator:
         return_mx: bool = False,
     ) -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
         import mlx.core as mx
-        import mlx_audio_io as mac
 
-        audio_mx, sr = mac.load(str(path), sr=self.samplerate, dtype="float32")
+        from .audio import load_audio
+
+        audio_mx, sr = load_audio(path, sr=self.samplerate, dtype="float32")
         wav = mx.transpose(audio_mx, (1, 0))
         return self.separate_tensor(wav, return_mx=return_mx)
 

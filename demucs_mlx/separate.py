@@ -89,9 +89,10 @@ def _list_models() -> int:
 
 def _load_audio(path: Path, model):
     import mlx.core as mx
-    import mlx_audio_io as mac
 
-    audio_mx, sr = mac.load(str(path), sr=model.samplerate, dtype="float32")
+    from .audio import load_audio
+
+    audio_mx, sr = load_audio(path, sr=model.samplerate, dtype="float32")
     wav = audio_mx.T
     src_channels = wav.shape[0]
     tgt_channels = model.audio_channels

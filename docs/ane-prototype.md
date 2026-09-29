@@ -12,6 +12,8 @@ metalq submit -w --no-env-sync -n demucs-ane-conv-convert -- python -m demucs_ml
 demucs-mlx --ane-time-encoder song.wav
 ```
 
+For file-based CLI use with MLX 0.32.3, this host also needs the local `mlx-audio-io` pairing fix described under **Real-audio CLI validation** below. A clean `uv sync` currently installs a native audio build that cannot return MLX arrays.
+
 The runtime needs only the `ane` extra after conversion. The equivalent API is `Separator(ane_time_encoder=True)`; use it as a context manager or call `close()` to stop its worker. `--verbose` prints execution, wait, and transfer time. Ordinary inference remains on MLX.
 
 ## Why the partition changed
@@ -63,4 +65,10 @@ metalq submit -w --no-env-sync -n demucs-ane-cli-integration -- python tests/pro
 
 Measurements used an Apple M4 Max with macOS 27, MLX 0.32.3, Core ML Tools 9.0, and PyTorch 2.7.1. The 16,384-sample isolated convolution was placed on ANE only at batch two; the batch-one probe chose CPU, which is why the runtime pads final batches.
 
-The real-audio CLI smoke test is currently blocked by `mlx-audio-io` 1.3.13: `load()` raises a native return-value `TypeError` even after rebuilding it against MLX 0.32.3. The CLI wiring was also exercised with stdlib WAV I/O in `tests/probe_ane_cli.py`; it produced all four stems and closed the worker. This audio I/O issue also affects the ordinary GPU CLI and was reported to `mlx-audio-io` via devfeedback.
+## Real-audio CLI validation
+
+The published `mlx-audio-io` 1.3.19 release built here with nanobind 2.15.0 and MLX 0.32.3, then failed in `load()` with `Unable to convert function return value to a Python type`. [MLX v0.32.3 pins nanobind 3.0.1](https://github.com/ml-explore/mlx/blob/v0.32.3/CMakeLists.txt). A local, uncommitted `~/Code/mlx-audio-io` checkout contains a build-pairing fix. Installing it with `uv pip install --python .venv/bin/python --force-reinstall --no-deps --no-cache /Users/sam/Code/mlx-audio-io` produced a binary reporting MLX 0.32.3 and nanobind 3.0.1. No source files in the sibling checkout were changed here.
+
+With that local build, `metalq` job `mq-f95933` ran the real CLI on a 1-second stereo WAV and wrote all four stems. Job `mq-13d094` ran the same CLI on a 30-second stereo WAV with default inference settings and batch two, wrote four 1,323,000-frame stems, and reported four ANE predictions, 0.073 s of execution, 0.000 s of wait, and 0.016 s of transfer. The default GPU CLI also passed in job `mq-ea87e1`. The earlier stdlib WAV I/O probe in `tests/probe_ane_cli.py` passed as well.
+
+A clean `uv sync` still rebuilds the published 1.3.19 source with the wrong pairing. The lockfile now selects 1.3.19, but it cannot reproduce the working native extension until the upstream pairing fix is published. The CLI and `Separator.separate_audio_file()` now turn the observed native return-value error into an actionable build-pairing message. The root cause and verified local fix were reported through devfeedback.
