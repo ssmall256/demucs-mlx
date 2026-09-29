@@ -7,6 +7,18 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## Unreleased
+
+### Added
+
+- `DEMUCS_MLX_COMPILE_FORWARD=1` enables deferred, shape-keyed whole-forward
+  compilation for repeated GPU inference. It remains opt-in because cold-run
+  results varied; the ANE path is excluded.
+
+### Changed
+
+- The standalone CLI now defaults to two concurrent stem writers.
+
 ## 1.4.14 - 2026-09-23
 
 ### Changed
