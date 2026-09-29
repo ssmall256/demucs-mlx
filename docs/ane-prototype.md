@@ -4,6 +4,16 @@
 
 The opt-in `--ane-time-encoder` path sends the first `htdemucs` waveform convolution to the Apple Neural Engine while MLX evaluates the independent spectral encoder on the GPU. The remaining waveform layers stay on MLX. On the tested M4 Max, this gives essentially the same end-to-end throughput as the GPU default; it is a working, measured prototype.
 
+Selecting one `htdemucs_ft` stem skips three specialized models, but its remaining
+model still contains both spectral and waveform branches, cross-attention, and
+the decoders. There is currently no validated ANE-only path for that model.
+Core ML can convert a full HTDemucs model, yet the compute-unit setting only
+permits devices; placement must be checked with a compute plan. Here the
+full-length waveform encoder chose CPU, while the ANE-placed later waveform
+stages failed the required fidelity. A single-stem ANE experiment would need
+its own weight-bound full-model asset, operation placement check, output parity,
+and end-to-end timing before it could become a runtime option.
+
 The converter uses the official checkpoint through `get_restricted_demucs_model`, global waveform normalization, and an exact tiling of the first stride-4 convolution. The 343,980-sample input becomes seven overlapping 49,144-sample convolutions in one fixed-shape Core ML model. The overlap preserves every output sample, including boundaries. The compiled model and manifest live under `~/.cache/demucs-mlx/ane/`; the manifest checks the validated MLX safetensors SHA-256 before inference. Conversion and inference require macOS. Only the default `htdemucs`, 7.8-second split segments, and batch sizes 1 or 2 are accepted.
 
 ```bash
