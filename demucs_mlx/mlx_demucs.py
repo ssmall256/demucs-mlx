@@ -14,7 +14,13 @@ from functools import lru_cache
 import mlx.core as mx
 import mlx.nn as nn
 
-from .mlx_layers import Conv1dNCL, ConvTranspose1dNCL, Lambda, _use_fused_gn_glu
+from .mlx_layers import (
+    Conv1dNCL,
+    ConvTranspose1dNCL,
+    Lambda,
+    _group_norm_via_layer_norm,
+    _use_fused_gn_glu,
+)
 from .mlx_utils import MLXStateDictMixin, center_trim, unfold
 
 # ---------------------------------------------------------------------------
@@ -203,32 +209,9 @@ class GroupNorm(nn.Module):
             self.bias = None
 
     def __call__(self, x: mx.array) -> mx.array:
-        B, C = x.shape[0], x.shape[1]
-        G = self.num_groups
-        if C % G != 0:
-            raise ValueError(f"num_channels {C} not divisible by num_groups {G}")
-        
-        # Reshape to (B, G, C//G, ...)
-        x_reshaped = x.reshape(B, G, C // G, *x.shape[2:])
-        
-        # Calculate stats (single-pass variance is faster)
-        axes = tuple(range(2, x_reshaped.ndim))
-        mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = mx.var(x_reshaped, axis=axes, keepdims=True)
-
-        # Normalize
-        x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
-        
-        # Restore original shape
-        # Fix: Use x.shape explicitly to handle both 3D (Audio) and 4D (Image) inputs correctly
-        x_out = x_norm.reshape(x.shape)
-        
-        if self.affine:
-            # Broadcast weight/bias: (1, C, 1...)
-            shape = [1, C] + [1] * (x_out.ndim - 2)
-            x_out = x_out * self.weight.reshape(shape) + self.bias.reshape(shape)
-            
-        return x_out
+        return _group_norm_via_layer_norm(
+            x, self.num_groups, self.eps, self.weight, self.bias
+        )
 
 
 class LayerScale(nn.Module):

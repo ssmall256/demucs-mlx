@@ -191,6 +191,25 @@ def _use_fused_gn_glu() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _group_norm_via_layer_norm(
+    x: mx.array,
+    num_groups: int,
+    eps: float,
+    weight: mx.array | None,
+    bias: mx.array | None,
+) -> mx.array:
+    """Normalize each channel group with MLX's fused last-axis kernel."""
+    batch, channels = x.shape[:2]
+    if channels % num_groups:
+        raise ValueError(f"num_channels {channels} not divisible by num_groups {num_groups}")
+    grouped = x.reshape(batch, num_groups, -1)
+    normalized = mx.fast.layer_norm(grouped, None, None, eps).reshape(x.shape)
+    if weight is None:
+        return normalized
+    affine_shape = (1, channels) + (1,) * (x.ndim - 2)
+    return normalized * weight.reshape(affine_shape) + bias.reshape(affine_shape)
+
+
 class GroupNormNCL(nn.Module):
     """
     Optimized GroupNorm for NCL layout.
@@ -211,34 +230,9 @@ class GroupNormNCL(nn.Module):
             self.bias = None
 
     def __call__(self, x: mx.array) -> mx.array:
-        B, C = x.shape[0], x.shape[1]
-        G = self.num_groups
-        if C % G != 0:
-            raise ValueError(f"num_channels {C} not divisible by num_groups {G}")
-        
-        # Reshape (N, C, L) -> (N, G, C//G, L)
-        # We split the channel dim (1).
-        # Since memory is likely N-C-L, this is a metadata view.
-        x_reshaped = x.reshape(B, G, C // G, *x.shape[2:])
-        
-        # Calculate stats over (C//G, L).
-        # L is the last dim (contiguous), so this reduction is fast.
-        axes = tuple(range(2, x_reshaped.ndim))
-        mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = mx.var(x_reshaped, axis=axes, keepdims=True)
-
-        # Normalize
-        x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
-
-        # Restore (N, C, L)
-        x_out = x_norm.reshape(x.shape)
-        
-        if self.affine:
-            # Broadcast weight/bias: (1, C, 1)
-            shape = [1, C] + [1] * (x_out.ndim - 2)
-            x_out = x_out * self.weight.reshape(shape) + self.bias.reshape(shape)
-            
-        return x_out
+        return _group_norm_via_layer_norm(
+            x, self.num_groups, self.eps, self.weight, self.bias
+        )
 
 
 class GroupNormNCHW(nn.Module):
@@ -259,24 +253,9 @@ class GroupNormNCHW(nn.Module):
             self.bias = None
 
     def __call__(self, x: mx.array) -> mx.array:
-        B, C = x.shape[0], x.shape[1]
-        G = self.num_groups
-        
-        # Reshape (N, C, H, W) -> (N, G, C//G, H, W)
-        x_reshaped = x.reshape(B, G, C // G, *x.shape[2:])
-        
-        axes = tuple(range(2, x_reshaped.ndim))
-        mean = x_reshaped.mean(axis=axes, keepdims=True)
-        var = mx.var(x_reshaped, axis=axes, keepdims=True)
-
-        x_norm = (x_reshaped - mean) * mx.rsqrt(var + self.eps)
-        x_out = x_norm.reshape(x.shape)
-
-        if self.affine:
-            shape = [1, C] + [1] * (x_out.ndim - 2)
-            x_out = x_out * self.weight.reshape(shape) + self.bias.reshape(shape)
-
-        return x_out
+        return _group_norm_via_layer_norm(
+            x, self.num_groups, self.eps, self.weight, self.bias
+        )
 
 
 class GLUNCL(nn.Module):

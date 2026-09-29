@@ -39,6 +39,8 @@ The 30- and 60-second benchmark below uses default inference settings (one shift
 
 ## Throughput
 
+The table below predates the faster default GroupNorm implementation. See [the later throughput experiments](throughput.md) for measurements with that change.
+
 The seven-tile convolution averaged **3.83–3.94 ms** per warmed prediction versus **4.05–4.18 ms** for 21 tiles in alternating job `mq-607f34`. The following full-pipeline runs were submitted with `metalq submit -w` in job `mq-74654a`. The sequence alternated GPU/ANE twice for each duration. Times include `Separator.separate_tensor` and materializing every stem, but exclude model loading and audio file I/O.
 
 | Input | Pair | GPU | ANE | GPU / ANE | ANE execution | ANE wait | Transfer |
