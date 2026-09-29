@@ -223,6 +223,21 @@ class RestrictedCheckpointTests(unittest.TestCase):
         self.assertEqual(set(loaded_model.state_dict()), set(package["state"]))
 
     @unittest.skipUnless(torch is not None, "conversion dependencies are not installed")
+    def test_training_metadata_allows_bounded_integer_mapping_keys(self) -> None:
+        assert torch is not None
+        package = _demucs_package()
+        package["training_args"]["dset"] = {"test_mapping": {0: "a", 1: "b"}}
+        self.assertIs(_validate_package(package, torch), package)
+
+        package["training_args"]["dset"]["test_mapping"] = {2**64: "too large"}
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            _validate_package(package, torch)
+
+        package["training_args"]["dset"]["test_mapping"] = {1.5: "not an integer"}
+        with self.assertRaisesRegex(ValueError, "string keys"):
+            _validate_package(package, torch)
+
+    @unittest.skipUnless(torch is not None, "conversion dependencies are not installed")
     def test_unknown_class_and_malformed_packages_fail_closed(self) -> None:
         assert torch is not None and Demucs is not None
         package = _demucs_package()

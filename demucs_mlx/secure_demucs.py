@@ -132,6 +132,7 @@ def _validate_metadata_value(
     *,
     budget: tp.Optional[_MetadataBudget] = None,
     depth: int = 0,
+    allow_integer_keys: bool = False,
 ) -> None:
     import numpy as np
 
@@ -168,20 +169,30 @@ def _validate_metadata_value(
                 f"{path}[{index}]",
                 budget=budget,
                 depth=depth + 1,
+                allow_integer_keys=allow_integer_keys,
             )
         return
     if isinstance(value, dict):
         if len(value) > _MAX_CONTAINER_ITEMS:
             raise ValueError(f"Mapping at {path} is too large")
         for key, item in value.items():
-            if not isinstance(key, str):
+            if isinstance(key, str):
+                _validate_string(key, f"{path} key")
+            elif (
+                allow_integer_keys
+                and not isinstance(key, bool)
+                and isinstance(key, (int, np.integer))
+            ):
+                if int(key).bit_length() > _MAX_INTEGER_BITS:
+                    raise ValueError(f"Integer metadata key at {path} is out of range")
+            else:
                 raise ValueError(f"Mapping at {path} must use string keys")
-            _validate_string(key, f"{path} key")
             _validate_metadata_value(
                 item,
                 f"{path}.{key}",
                 budget=budget,
                 depth=depth + 1,
+                allow_integer_keys=allow_integer_keys,
             )
         return
     raise ValueError(f"Unsupported metadata value at {path}: {type(value).__name__}")
@@ -292,7 +303,7 @@ def _validate_package(package: tp.Any, torch: tp.Any) -> dict[str, tp.Any]:
         raise ValueError("Invalid Demucs constructor args or kwargs") from exc
 
     for optional_field in _PACKAGE_OPTIONAL_FIELDS.intersection(package):
-        _validate_metadata_value(package[optional_field], optional_field)
+        _validate_metadata_value(package[optional_field], optional_field, allow_integer_keys=True)
 
     state = package["state"]
     if not isinstance(state, dict) or not state or len(state) > _MAX_STATE_KEYS:
