@@ -102,6 +102,11 @@ shift parity, skipped model execution, default behavior, and argument errors
 (`mq-f55f77`). The real CLI wrote only a 44,100-frame `vocals.wav` from a
 one-second input (`mq-a52142`).
 
+A further attempt sliced the requested source before spectral reconstruction
+inside the chosen model. Samples still matched exactly, but same-process pairs
+measured 0.85×, 0.98×, and 1.05× against reconstructing all four model outputs
+(`mq-06a1de`). There was no repeatable speedup, so that extra code was removed.
+
 ## Candidates measured but not adopted
 
 The batch size sweep (`mq-c0e8d4`) compared batches two, four, and eight on 30- and 60-second inputs before the GroupNorm change. At 30 seconds, all warmed times were within 0.018 seconds (0.631–0.649 s). At 60 seconds, batch four sometimes helped, but batch eight ranged from 1.227 to 1.361 seconds versus 1.170–1.201 seconds for batch two. Keeping batch two avoids a regression on longer inputs.
