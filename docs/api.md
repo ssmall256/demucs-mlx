@@ -29,6 +29,7 @@ for name, audio in stems.items():
 - **segment** (`float | None`): Segment length in seconds. Default `None` (uses model default).
 - **batch_size** (`int`): Number of segments to process in parallel. Default `2`.
 - **ane_time_encoder** (`bool`): Offload the first default `htdemucs` waveform convolution to the Neural Engine. Default `False`. Requires the converted asset, macOS, split 7.8-second segments, and batch size 1 or 2. Use `Separator` as a context manager or call `close()` to stop the worker.
+- **stem** (`str | None`): For `htdemucs_ft`, run only the model for this stem (`drums`, `bass`, `other`, or `vocals`). Default `None` computes all four. The returned dictionary contains only the requested stem.
 - **progress** (`bool`): Show progress bar. Default `False`.
 
 ### Properties
@@ -60,6 +61,22 @@ Separate an audio file. Reads the file using `mlx-audio-io`.
 - **return_mx** (`bool`): If `True`, return MLX arrays instead of numpy. Default `False`.
 
 **Returns:** Same as `separate_tensor`.
+
+For the fine-tuned model, select one stem in Python or the CLI:
+
+```python
+separator = Separator(model="htdemucs_ft", stem="vocals", seed=481)
+_, stems = separator.separate_audio_file("song.wav")
+vocals = stems["vocals"]
+```
+
+```bash
+demucs-mlx -n htdemucs_ft --stem vocals song.wav
+```
+
+The selected stem uses the same shift offsets and produces the same result as
+running the full `htdemucs_ft` bag with the same seed. `--stem` is available only
+for `htdemucs_ft`; other models still compute all their stems together.
 
 **Note:** If the audio file's sample rate differs from the model's (44100 Hz for all current models), it will be automatically resampled via mlx-audio-io.
 

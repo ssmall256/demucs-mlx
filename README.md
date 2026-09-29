@@ -140,6 +140,14 @@ The current development branch reduces warmed 30- and 60-second `htdemucs` separ
 | `mdx` | 4 | Music Demixing model |
 | `mdx_extra` | 4 | MDX with extra training |
 
+For a single fine-tuned stem, `--stem` runs only its specialized model:
+
+```bash
+demucs-mlx -n htdemucs_ft --stem vocals song.wav
+```
+
+The full four-stem `htdemucs_ft` run remains available by omitting `--stem`.
+
 ## MLX model cache
 
 Pre-converted MLX weights are cached under `~/.cache/demucs-mlx` by default. When the

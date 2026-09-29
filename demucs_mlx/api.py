@@ -24,6 +24,7 @@ class Separator:
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
         ane_time_encoder: bool = False,
+        stem: tp.Optional[str] = None,
     ):
         if model not in MLX_MODEL_REGISTRY:
             known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
@@ -42,6 +43,8 @@ class Separator:
             raise ValueError("segment must be > 0 when provided.")
         if int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
+        if stem is not None and model != "htdemucs_ft":
+            raise ValueError("Single-stem acceleration only supports htdemucs_ft")
         if ane_time_encoder:
             if model != "htdemucs":
                 raise ValueError("ANE waveform path only supports the default htdemucs model")
@@ -74,6 +77,10 @@ class Separator:
         self._model = get_mlx_model(model)
         if hasattr(self._model, "eval"):
             self._model.eval()
+        if stem is not None and stem not in self._model.sources:
+            raise ValueError(f"Unknown stem {stem!r}; available: {', '.join(self._model.sources)}")
+        self.stem = stem
+        self._source_index = self._model.sources.index(stem) if stem is not None else None
         self._ane_worker = None
         if ane_time_encoder:
             from .ane import WaveformConv
@@ -213,15 +220,17 @@ class Separator:
             progress=self.progress,
             batch_size=self.batch_size,
             seed=self.seed,
+            source_index=self._source_index,
         )
         mx.eval(estimates)
         stems_mx = estimates[0]
+        names = (self.stem,) if self.stem is not None else self._model.sources
         if return_mx:
-            stems = {name: stems_mx[idx] for idx, name in enumerate(self._model.sources)}
+            stems = {name: stems_mx[idx] for idx, name in enumerate(names)}
             return wav_mx, stems
         wav_np = np.asarray(wav_mx)
         stems_np = np.asarray(stems_mx)
-        stems = {name: stems_np[idx] for idx, name in enumerate(self._model.sources)}
+        stems = {name: stems_np[idx] for idx, name in enumerate(names)}
         return wav_np, stems
 
     def separate_audio_file(
