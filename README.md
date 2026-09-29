@@ -183,6 +183,7 @@ globals; it is not a resource-exhaustion sandbox for otherwise valid tensor file
 - API reference: `docs/api.md`
 - Development workflow: `docs/development.md`
 - Platform notes: `docs/platform.md`
+- Neural Engine waveform encoder experiment: `docs/ane-prototype.md`
 
 ## License
 

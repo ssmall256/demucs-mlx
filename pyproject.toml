@@ -36,6 +36,16 @@ convert = [
   "torch>=2.6",
 ]
 
+ane = [
+  "pyobjc-framework-CoreML>=10; sys_platform == 'darwin'",
+]
+
+ane-convert = [
+  "coremltools==9.0; sys_platform == 'darwin'",
+  "demucs>=4.0",
+  "torch>=2.6,<2.8",
+]
+
 [project.scripts]
 demucs-mlx = "demucs_mlx.separate:main"
 
