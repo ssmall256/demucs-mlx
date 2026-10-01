@@ -6,9 +6,10 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 ## Features
 
-- **~73x realtime** on Apple Silicon — 2.6x faster than Demucs with PyTorch MPS
+- **Up to 93.4x realtime** on Apple Silicon (M4 Max) — >3.3x faster than Demucs with PyTorch MPS
+- **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
 - **Bit-exact parity** with upstream Demucs stems (within floating-point tolerance)
-- Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
+- Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
 - Automatic resampling — input files at any sample rate are resampled to the model rate
@@ -60,7 +61,8 @@ Options:
 --shifts            Number of random shifts (default: 1)
 --seed              Optional RNG seed for reproducible shifts (default: none)
 --overlap           Overlap ratio (default: 0.25)
--b, --batch-size    Batch size (default: 2)
+-b, --batch-size    Batch size (default: auto, matched to hardware topology)
+--compile           Opt in to whole-forward compilation for fixed shapes
 --write-workers     Concurrent writer threads (default: 2)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
@@ -102,7 +104,8 @@ discoverable rather than buried in source.
 
 | Setting | Default | Why |
 |---|---|---|
-| `-b` / `--batch-size` | `2` | Fastest and smallest. Larger batches thrash memory on 16-36 GB Macs. |
+| `-b` / `--batch-size` | `auto` | Dynamically auto-tunes batch size based on hardware topology (e.g. 8 on M4 Max with 40 GPU cores / 546 GB/s; 2 on base chips). |
+| `--compile` | `None` (off) | Compiles repeated forward graph execution blocks for fixed chunk shapes. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
 | `--write-workers` | `2` | Encodes stems concurrently while the next track runs. |

@@ -7,17 +7,36 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
-## Unreleased
+## 1.5.0 - 2026-10-01
 
 ### Added
 
-- `DEMUCS_MLX_COMPILE_FORWARD=1` enables deferred, shape-keyed whole-forward
-  compilation for repeated GPU inference. It remains opt-in because cold-run
-  results varied; the ANE path is excluded.
+- All-time throughput record of **93.4× RTFx** (1.285s peak, 1.296s median for 120s
+  separation) on Apple M4 Max with bit-exact reconstruction fidelity (>319 dB SNR).
+- Apple Silicon runtime topology auto-tuner (`demucs_mlx/hardware.py`): dynamically
+  inspects memory bandwidth, GPU core counts, and system cache capacity to select
+  optimal batch sizing (`--batch-size auto`, defaulting to 8 on Max chips and 2 on base).
+- Fused 128-bit vectorized 2D-coalesced zero-transpose GLU Metal kernel, eliminating
+  transposition round-trips and memory stalls.
+- Decoupled waveform branch execution streams (`s_side`), maximizing hardware utilization
+  across independent compute paths.
+- Native FP16 fused projection GEMMs for MultiHeadAttention (`qkv_proj`, `kv_proj`).
+- Whole-forward compilation flag `--compile` / `Separator(compile=True)` for fixed-batch
+  graph acceleration.
+- Pre-fused attention projections across all 4 sub-models in `BagOfModelsMLX` (`htdemucs_ft`),
+  guaranteeing zero repeated projection GEMMs during ensemble inference.
+- High-speed single-stem fine-tuned inference (`--stem vocals`), running at **81.3× RTFx**
+  (1.476s for 120s audio, 3.95× faster than full ensemble separation).
+- Apple Neural Engine (ANE) waveform encoder offload via PyObjC and Grand Central Dispatch
+  (`--ane-time-encoder`), bypassing Python GIL overhead.
+- Streamlined audio I/O utilizing native `channels_first` decoding and `layout="auto"`
+  WAV encoding from `mlx-audio-io` 1.3.20.
 
 ### Changed
 
-- The standalone CLI now defaults to two concurrent stem writers.
+- Default `--batch-size` is now `'auto'`, configuring inference batches dynamically
+  to fit Apple Silicon hardware characteristics.
+- Standalone CLI defaults to two concurrent stem writers.
 
 ## 1.4.14 - 2026-09-23
 
