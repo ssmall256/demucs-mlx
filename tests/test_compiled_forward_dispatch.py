@@ -70,3 +70,51 @@ def test_explicit_opt_out_and_cache_cleanup(monkeypatch):
     del model
     gc.collect()
     assert key not in apply_mlx._COMPILED_FORWARDS
+
+
+def test_explicit_compile_argument_overrides_env(monkeypatch):
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "0")
+    model = _Model()
+    x = mx.ones((2, 2, 64))
+    for _ in range(4):
+        mx.eval(apply_mlx._forward(model, x, compile=True))
+    assert model.calls == 2
+    assert id(model) in apply_mlx._COMPILED_FORWARDS
+
+    # Explicit compile=False overrides env=1
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "1")
+    model2 = _Model()
+    for _ in range(4):
+        mx.eval(apply_mlx._forward(model2, x, compile=False))
+    assert model2.calls == 4
+    assert id(model2) not in apply_mlx._COMPILED_FORWARDS
+
+
+def test_cli_compile_flag_parsing():
+    from demucs_mlx.separate import _build_parser
+
+    parser = _build_parser()
+    args_default = parser.parse_args(["track.wav"])
+    assert args_default.compile is None
+
+    args_compile = parser.parse_args(["track.wav", "--compile"])
+    assert args_compile.compile is True
+
+    args_no_compile = parser.parse_args(["track.wav", "--no-compile"])
+    assert args_no_compile.compile is False
+
+
+def test_separator_compile_parameter():
+    from demucs_mlx.api import Separator
+
+    sep = Separator.__new__(Separator)
+    sep.compile = True
+    assert sep.compile is True
+
+    sep.update_parameter(compile=False)
+    assert sep.compile is False
+
+    sep.update_parameter(compile=True)
+    assert sep.compile is True
+
+

@@ -25,6 +25,7 @@ class Separator:
         callback_arg: tp.Optional[dict] = None,
         ane_time_encoder: bool = False,
         stem: tp.Optional[str] = None,
+        compile: tp.Optional[bool] = None,
     ):
         if model not in MLX_MODEL_REGISTRY:
             known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
@@ -71,6 +72,7 @@ class Separator:
         self.callback = callback
         self.callback_arg = callback_arg
         self._ane_requested = bool(ane_time_encoder)
+        self.compile = compile
         self._closed = False
 
         from .model_converter import get_mlx_model
@@ -127,6 +129,7 @@ class Separator:
         segment: tp.Optional[float] = None,
         seed: tp.Optional[int] = None,
         progress: tp.Optional[bool] = None,
+        compile: tp.Optional[bool] = None,
     ) -> None:
         if shifts is not None:
             if int(shifts) < 0:
@@ -151,6 +154,8 @@ class Separator:
                 raise ValueError("seed must be an integer or None.") from exc
         if progress is not None:
             self.progress = progress
+        if compile is not None:
+            self.compile = bool(compile)
 
     def _prepare_wav(self, wav):  # -> np.ndarray
         import numpy as np
@@ -221,6 +226,7 @@ class Separator:
             batch_size=self.batch_size,
             seed=self.seed,
             source_index=self._source_index,
+            compile=self.compile,
         )
         mx.eval(estimates)
         stems_mx = estimates[0]

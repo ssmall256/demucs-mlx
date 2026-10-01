@@ -176,6 +176,7 @@ def _separate_one(
     verbose: bool,
     writer: _AsyncWriter,
     stem: tp.Optional[str] = None,
+    compile: tp.Optional[bool] = None,
 ) -> None:
     import mlx.core as mx
 
@@ -205,6 +206,7 @@ def _separate_one(
             batch_size=batch_size,
             progress=verbose,
             source_index=source_index,
+            compile=compile,
         )
         mx.eval(estimates)
         if stage is not None:
@@ -266,6 +268,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ane-time-encoder", action="store_true",
         help="run the first HTDemucs waveform convolution on the Neural Engine",
+    )
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Compile repeated forward graph chunks (also controlled by DEMUCS_MLX_COMPILE_FORWARD=1)",
     )
     parser.add_argument("--list-models", action="store_true", help="List available models")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
@@ -350,6 +358,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
                 verbose=args.verbose,
                 writer=writer,
                 stem=args.stem,
+                compile=args.compile,
             )
     finally:
         writer.close()
