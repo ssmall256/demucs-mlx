@@ -253,12 +253,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional RNG seed for reproducible shifts",
     )
+    def _parse_batch_size(val: str):
+        if str(val).lower() == "auto":
+            return "auto"
+        try:
+            ival = int(val)
+            if ival <= 0:
+                raise argparse.ArgumentTypeError("--batch-size must be > 0")
+            return ival
+        except ValueError:
+            raise argparse.ArgumentTypeError("--batch-size must be an integer or 'auto'")
+
     parser.add_argument(
         "-b",
         "--batch-size",
-        type=int,
+        type=_parse_batch_size,
         default=DEFAULT_BATCH_SIZE,
-        help=f"Batch size for inference (default: {DEFAULT_BATCH_SIZE})",
+        help="Batch size for inference (default: 'auto' based on hardware topology)",
     )
     parser.add_argument("--write-workers", type=int, default=2,
                         help="Number of concurrent audio writer threads")
@@ -274,6 +285,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Compile repeated forward graph chunks (also controlled by DEMUCS_MLX_COMPILE_FORWARD=1)",
+    )
+    parser.add_argument(
+        "--auto-tune",
+        action="store_true",
+        help="Auto-tune batch size and stream policy based on Apple Silicon topology",
     )
     parser.add_argument("--list-models", action="store_true", help="List available models")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
@@ -292,14 +308,19 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     if not args.tracks:
         parser.print_help(sys.stderr)
         return 2
+    if args.auto_tune or args.batch_size is None or str(args.batch_size).lower() == "auto":
+        from .hardware import optimal_batch_size
+        args.batch_size = optimal_batch_size()
+    elif int(args.batch_size) <= 0:
+        raise SystemExit("--batch-size must be > 0")
+    else:
+        args.batch_size = int(args.batch_size)
     if args.shifts < 0:
         raise SystemExit("--shifts must be >= 0")
     if not (0.0 <= float(args.overlap) < 1.0):
         raise SystemExit("--overlap must be in [0, 1)")
     if args.segment is not None and float(args.segment) <= 0:
         raise SystemExit("--segment must be > 0")
-    if args.batch_size <= 0:
-        raise SystemExit("--batch-size must be > 0")
     if args.write_workers <= 0:
         raise SystemExit("--write-workers must be > 0")
     if args.prefetch_tracks < 0:
@@ -315,8 +336,6 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
             raise SystemExit("--ane-time-encoder only supports the default htdemucs model")
         if args.no_split or (args.segment is not None and args.segment != 7.8):
             raise SystemExit("--ane-time-encoder requires split 7.8-second segments")
-        if args.batch_size not in (1, 2):
-            raise SystemExit("--ane-time-encoder requires --batch-size 1 or 2")
 
     if args.verbose:
         print(f"Loading MLX model: {args.name}")

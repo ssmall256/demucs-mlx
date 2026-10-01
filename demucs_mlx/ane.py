@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import typing as tp
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -416,6 +416,9 @@ class WaveformConv:
         self.wait_seconds = 0.0
         self.transfer_seconds = 0.0
         self.predictions = 0
+        self._cached_out_targets: dict[int, np.ndarray] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="demucs-ane-sub")
+        self._thread_local = threading.local()
         self._jobs: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, daemon=True, name="demucs-ane")
         self._worker.start()
@@ -437,6 +440,7 @@ class WaveformConv:
         if self._worker.is_alive():
             self._jobs.put(None)
             self._worker.join()
+        self._executor.shutdown(wait=False)
 
     def _run(self) -> None:
         while True:
@@ -455,21 +459,42 @@ class WaveformConv:
 
     def _predict(self, data: np.ndarray, out_target: np.ndarray | None = None):
         count = len(data)
-        if count > 2:
+        if out_target is None:
+            self._slot = 1 - getattr(self, "_slot", 0)
+            key = (count, self._slot)
+            out_target = self._cached_out_targets.get(key)
             if out_target is None:
                 shape = (count,) + self._output_specs[self._output_names[0]][0][1:]
                 np_dtype = self._output_specs[self._output_names[0]][2]
                 out_target = np.empty(shape, dtype=np_dtype)
-            for start in range(0, count, 2):
-                chunk = data[start : min(start + 2, count)]
-                self._predict(chunk, out_target=out_target[start : min(start + 2, count)])
+                self._cached_out_targets[key] = out_target
+
+        from .native_ane import predict_waveform_conv_native
+        if predict_waveform_conv_native(self.path, data, out_target):
+            return out_target
+
+        if count > 2:
+            futures = [
+                self._executor.submit(
+                    self._predict,
+                    data[start : min(start + 2, count)],
+                    out_target=out_target[start : min(start + 2, count)],
+                )
+                for start in range(0, count, 2)
+            ]
+            for f in futures:
+                f.result()
             return out_target
 
         coreml = self._coreml
         if count == 1:
-            self._in_pad_buf[0] = data[0]
-            self._in_pad_buf[1] = data[0]
-            data = self._in_pad_buf
+            pad_buf = getattr(self._thread_local, "in_pad_buf", None)
+            if pad_buf is None:
+                pad_buf = np.empty((BATCH, 2, LENGTH), dtype=np.float32)
+                self._thread_local.in_pad_buf = pad_buf
+            pad_buf[0] = data[0]
+            pad_buf[1] = data[0]
+            data = pad_buf
         elif not data.flags.c_contiguous:
             data = np.ascontiguousarray(data)
 

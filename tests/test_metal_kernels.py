@@ -286,6 +286,66 @@ def test_transformer_norm_fix():
     print()
 
 
+def test_fused_overlap_add():
+    """Test fused overlap-add kernel against reference accumulation."""
+    from demucs_mlx.metal_kernels import fused_overlap_add, _overlap_add_fallback
+    import numpy as np
+
+    print("=== Fused Overlap-Add Kernel ===")
+    test_cases = [
+        # (L, chunk_len, overlap, shape_prefix, dtype, desc)
+        (50000, 10000, 0.25, (1, 4, 2), mx.float32, "4-stem stereo 25% overlap (f32)"),
+        (50000, 10000, 0.50, (1, 4, 2), mx.float32, "4-stem stereo 50% overlap (f32)"),
+        (50000, 10000, 0.00, (1, 4, 2), mx.float32, "4-stem stereo 0% overlap (f32)"),
+        (43210, 8000, 0.25, (2,), mx.float32, "Stereo non-multiple length (f32)"),
+        (30000, 10000, 0.25, (1, 4, 2), mx.float16, "4-stem stereo 25% overlap (f16)"),
+    ]
+
+    all_passed = True
+    for L, chunk_len, overlap, prefix, dtype, desc in test_cases:
+        step = max(1, int((1.0 - overlap) * chunk_len))
+        offsets = list(range(0, L, step))
+        num_chunks = len(offsets)
+
+        rng = np.random.default_rng(42)
+        frames_shape = (num_chunks, *prefix, chunk_len)
+        frames_np = rng.standard_normal(frames_shape).astype(np.float32)
+
+        half = chunk_len // 2
+        w_first = np.arange(1, half + 1)
+        w_second = np.arange(chunk_len - half, 0, -1)
+        w_np = np.concatenate([w_first, w_second]).astype(np.float32)
+        w_np = (w_np / np.max(w_np)).astype(np.float32)
+
+        frames = mx.array(frames_np, dtype=dtype)
+        window = mx.array(w_np, dtype=dtype)
+
+        # Fallback reference
+        ref = _overlap_add_fallback(frames, window, step, L)
+        mx.eval(ref)
+
+        # Custom Metal kernel
+        out = fused_overlap_add(frames, window, step, L)
+        mx.eval(out)
+
+        ref_np = np.array(ref).astype(np.float32)
+        out_np = np.array(out).astype(np.float32)
+
+        diff = float(np.max(np.abs(ref_np - out_np)))
+        tol = 1e-3 if dtype == mx.float16 else 1e-5
+        passed = diff <= tol
+        if not passed:
+            all_passed = False
+
+        print(
+            f"  {desc:40s} L={L:<6d} chunks={num_chunks:<2d} "
+            f"diff={diff:.2e}  [{'PASS' if passed else 'FAIL'}]"
+        )
+
+    print(f"  Result: {'ALL PASSED' if all_passed else 'SOME FAILED'}\n")
+    assert all_passed
+
+
 if __name__ == "__main__":
     print("=" * 70)
     print("Metal Kernel Numerical Parity Tests")
@@ -297,6 +357,8 @@ if __name__ == "__main__":
     test_fused_groupnorm_gelu()
     test_fused_groupnorm_glu()
     test_fused_complex_to_interleaved()
+    test_fused_overlap_add()
 
     print("=" * 70)
     print("All tests passed!")
+

@@ -9,7 +9,7 @@ import typing as tp
 
 import mlx.core as mx
 import mlx.nn as nn
-import numpy as np
+
 
 from .mlx_hdemucs import HDecLayer, HEncLayer, MultiWrap, ScaledEmbedding, pad1d
 from .mlx_layers import Conv1dNCL
@@ -451,10 +451,16 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         std = mx.std(x, axis=(1, 2, 3), keepdims=True)
         x = (x - mean) / (1e-5 + std)
 
-        xt = mix
-        meant = mx.mean(xt, axis=(1, 2), keepdims=True)
-        stdt = mx.std(xt, axis=(1, 2), keepdims=True)
-        xt = (xt - meant) / (1e-5 + stdt)
+        s_side = getattr(self, "_stream_side", None)
+        if s_side is None:
+            s_side = mx.new_stream(mx.default_device())
+            self._stream_side = s_side
+
+        with mx.stream(s_side):
+            xt = mix
+            meant = mx.mean(xt, axis=(1, 2), keepdims=True)
+            stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+            xt = (xt - meant) / (1e-5 + stdt)
 
         saved = []
         saved_t = []
@@ -462,11 +468,6 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         lengths_t = []
         if precomputed_conv is not None:
             from .ane import LENGTH
-
-            s_side = getattr(self, "_stream_side", None)
-            if s_side is None:
-                s_side = mx.new_stream(mx.default_device())
-                self._stream_side = s_side
 
             with mx.stream(s_side):
                 for time_idx, tenc in enumerate(self.tencoder):
@@ -638,9 +639,10 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             x = self._ispec(zout, length)
 
         # Reshape xt to match expected output shape
-        actual_length = xt.shape[-1]
-        xt = xt.reshape(B, S, -1, actual_length)
-        xt = xt * stdt[:, None] + meant[:, None]
+        with mx.stream(s_side):
+            actual_length = xt.shape[-1]
+            xt = xt.reshape(B, S, -1, actual_length)
+            xt = xt * stdt[:, None] + meant[:, None]
         # Trim x to match xt length before adding
         x = center_trim(x, xt)
         x = xt + x

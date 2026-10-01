@@ -37,30 +37,60 @@ HAS_METAL = _has_metal()
 # ==============================================================================
 # Fused GLU: a * sigmoid(b) where [a, b] = split(x, 2, axis)
 # ==============================================================================
-# After reshaping to (N, 2*C) with target axis last, the memory layout is:
-#   row i: [a_0, a_1, ..., a_{C-1}, b_0, b_1, ..., b_{C-1}]
-# So for element (row, col) where col < C:
-#   a = x[row * 2C + col]
-#   b = x[row * 2C + C + col]
-
 _GLU_SOURCE = r"""
-uint gid = thread_position_in_grid.x;
-uint total = params[0];     // N * C (total output elements)
-uint half_dim = params[1];  // C (half of last dimension)
+uint k = thread_position_in_grid.x;
+uint mc = thread_position_in_grid.y;
 
-if (gid >= total) return;
+uint K = params[0];
+uint C = params[1];
+uint MC = params[2];
 
-uint row = gid / half_dim;
-uint col = gid % half_dim;
-uint full_dim = half_dim * 2;
+if (k >= K || mc >= MC) return;
 
-float a = (float)x[row * full_dim + col];
-float b = (float)x[row * full_dim + half_dim + col];
+uint m = mc / C;
+uint c = mc % C;
+
+uint in_base = m * (2 * C * K) + k;
+uint in_idx_a = in_base + c * K;
+uint in_idx_b = in_base + (c + C) * K;
+
+float a = (float)x[in_idx_a];
+float b = (float)x[in_idx_b];
 float sig_b = 1.0f / (1.0f + metal::exp(-b));
-out[gid] = (T)(a * sig_b);
+
+out[mc * K + k] = (T)(a * sig_b);
+"""
+
+_GLU_VEC4_SOURCE = r"""
+uint k = thread_position_in_grid.x;
+uint mc = thread_position_in_grid.y;
+
+uint K4 = params[0];
+uint C = params[1];
+uint MC = params[2];
+
+if (k >= K4 || mc >= MC) return;
+
+uint m = mc / C;
+uint c = mc % C;
+
+uint in_base = m * (2 * C * K4) + k;
+uint in_idx_a = in_base + c * K4;
+uint in_idx_b = in_base + (c + C) * K4;
+
+const device vec<T, 4>* x_vec = (const device vec<T, 4>*)x;
+device vec<T, 4>* out_vec = (device vec<T, 4>*)out;
+
+vec<T, 4> a = x_vec[in_idx_a];
+vec<T, 4> b = x_vec[in_idx_b];
+vec<float, 4> b_f = (vec<float, 4>)b;
+vec<float, 4> sig_b = 1.0f / (1.0f + metal::exp(-b_f));
+
+out_vec[mc * K4 + k] = (vec<T, 4>)((vec<float, 4>)a * sig_b);
 """
 
 _glu_kernel = None
+_glu_vec4_kernel = None
 
 
 def _get_glu_kernel():
@@ -75,12 +105,24 @@ def _get_glu_kernel():
     return _glu_kernel
 
 
-def fused_glu(x: mx.array, axis: int = 1) -> mx.array:
-    """Fused GLU: split x in half along axis, compute a * sigmoid(b).
+def _get_glu_vec4_kernel():
+    global _glu_vec4_kernel
+    if _glu_vec4_kernel is None:
+        _glu_vec4_kernel = mx.fast.metal_kernel(
+            name="fused_glu_vec4",
+            input_names=["x", "params"],
+            output_names=["out"],
+            source=_GLU_VEC4_SOURCE,
+        )
+    return _glu_vec4_kernel
 
-    Equivalent to:
-        a, b = mx.split(x, 2, axis=axis)
-        return a * mx.sigmoid(b)
+
+def fused_glu(x: mx.array, axis: int = 1) -> mx.array:
+    """Zero-transpose fused GLU: split x in half along axis, compute a * sigmoid(b).
+
+    Operates directly on native tensor memory layout with 2D coalesced SIMD access
+    and 128-bit vectorization, eliminating transposition and contiguous memory
+    allocation overhead.
     """
     if not HAS_METAL:
         a, b = mx.split(x, 2, axis=axis)
@@ -89,41 +131,61 @@ def fused_glu(x: mx.array, axis: int = 1) -> mx.array:
     ndim = x.ndim
     axis = axis % ndim
 
-    in_shape = list(x.shape)
-    if in_shape[axis] % 2 != 0:
-        raise ValueError(f"Axis {axis} size must be even, got {in_shape[axis]}")
+    shape = list(x.shape)
+    if shape[axis] % 2 != 0:
+        raise ValueError(f"Axis {axis} size must be even, got {shape[axis]}")
 
-    # Move target axis to last for contiguous split
-    if axis != ndim - 1:
-        perm = list(range(ndim))
-        perm[axis], perm[-1] = perm[-1], perm[axis]
-        x = x.transpose(*perm)
+    x = mx.contiguous(x)
 
-    last_dim = x.shape[-1]
-    half = last_dim // 2
-    x_2d = mx.contiguous(x.reshape(-1, last_dim))
-    N = x_2d.shape[0]
-    total = N * half
+    M = 1
+    for s in shape[:axis]:
+        M *= s
+    C = shape[axis] // 2
+    K = 1
+    for s in shape[axis + 1 :]:
+        K *= s
 
-    params = mx.array([total, half], dtype=mx.int32)
+    MC = M * C
+    total_out = MC * K
+    out_shape = shape[:axis] + [C] + shape[axis + 1 :]
 
-    result_flat = _get_glu_kernel()(
-        inputs=[x_2d.reshape(-1), params],
-        template=[("T", x.dtype)],
-        grid=(total, 1, 1),
-        threadgroup=(min(256, total), 1, 1),
-        output_shapes=[(total,)],
-        output_dtypes=[x.dtype],
-    )[0]
+    # Vectorized 128-bit load/store when inner dimension is divisible by 4
+    if K % 4 == 0 and x.size % 4 == 0:
+        K4 = K // 4
+        params = mx.array([K4, C, MC], dtype=mx.int32)
+        tg_x = min(256, K4)
+        if tg_x >= 32:
+            tg_x = (tg_x // 32) * 32
+        tg_y = min(256 // max(1, tg_x), MC)
+        tg_y = max(1, tg_y)
+        kernel = _get_glu_vec4_kernel()
+        result = kernel(
+            inputs=[x, params],
+            template=[("T", x.dtype)],
+            grid=(K4, MC, 1),
+            threadgroup=(max(1, tg_x), tg_y, 1),
+            output_shapes=[(total_out,)],
+            output_dtypes=[x.dtype],
+        )[0]
+    else:
+        params = mx.array([K, C, MC], dtype=mx.int32)
+        tg_x = min(256, K) if K > 0 else 1
+        if tg_x >= 32:
+            tg_x = (tg_x // 32) * 32
+        tg_y = min(256 // max(1, tg_x), MC) if tg_x > 0 else 1
+        tg_y = max(1, tg_y)
+        kernel = _get_glu_kernel()
+        result = kernel(
+            inputs=[x, params],
+            template=[("T", x.dtype)],
+            grid=(K, MC, 1),
+            threadgroup=(max(1, tg_x), tg_y, 1),
+            output_shapes=[(total_out,)],
+            output_dtypes=[x.dtype],
+        )[0]
 
-    result = result_flat.reshape(*x.shape[:-1], half)
+    return result.reshape(out_shape)
 
-    if axis != ndim - 1:
-        perm = list(range(ndim))
-        perm[axis], perm[-1] = perm[-1], perm[axis]
-        result = result.transpose(*perm)
-
-    return result
 
 
 # Threshold: when elems_per_group exceeds this, use pure MLX ops
@@ -636,3 +698,140 @@ def fused_complex_to_interleaved(z: mx.array) -> mx.array:
     )[0]
 
     return result.reshape(B, 2 * C, Fr, T)
+
+
+# ==============================================================================
+# Fused parallel overlap-add across overlapping audio chunks
+# ==============================================================================
+
+_OVERLAP_ADD_SOURCE = r"""
+uint t = thread_position_in_grid.x;
+uint ch = thread_position_in_grid.y;
+uint total_samples = params[0];
+uint chunk_len = params[1];
+uint step = params[2];
+uint num_chunks = params[3];
+uint num_channels = params[4];
+
+if (t >= total_samples || ch >= num_channels) return;
+
+int last_k = min((int)(num_chunks - 1), (int)(t / step));
+int first_k = max(0, (int)((int)t - (int)chunk_len + (int)step) / (int)step);
+
+float acc = 0.0f;
+float wsum = 0.0f;
+
+for (int k = first_k; k <= last_k; ++k) {
+    int offset = k * step;
+    int j = (int)t - offset;
+    if (j >= 0 && j < (int)chunk_len) {
+        float w = (float)window[j];
+        uint frame_idx = (uint)k * num_channels * chunk_len + ch * chunk_len + (uint)j;
+        acc += (float)frames[frame_idx] * w;
+        wsum += w;
+    }
+}
+out[ch * total_samples + t] = (T)((wsum > 1e-11f) ? (acc / wsum) : 0.0f);
+"""
+
+_overlap_add_kernel = None
+
+
+def _get_overlap_add_kernel():
+    global _overlap_add_kernel
+    if _overlap_add_kernel is None:
+        _overlap_add_kernel = mx.fast.metal_kernel(
+            name="waveform_chunk_overlap_add",
+            input_names=["frames", "window", "params"],
+            output_names=["out"],
+            source=_OVERLAP_ADD_SOURCE,
+        )
+    return _overlap_add_kernel
+
+
+def _overlap_add_fallback(
+    frames: mx.array,
+    window: mx.array,
+    step: int,
+    total_samples: int,
+) -> mx.array:
+    orig_shape = frames.shape
+    num_chunks = orig_shape[0]
+    prefix_shape = orig_shape[1:-1]
+    chunk_len = orig_shape[-1]
+    num_channels = 1
+    for s in prefix_shape:
+        num_channels *= s
+    frames_flat = frames.reshape(num_chunks, num_channels, chunk_len).astype(mx.float32)
+    window_f32 = window.astype(mx.float32)
+    out = mx.zeros((num_channels, total_samples), dtype=mx.float32)
+    sum_weight = mx.zeros((total_samples,), dtype=mx.float32)
+    for k in range(num_chunks):
+        off = k * step
+        this_len = min(chunk_len, total_samples - off)
+        if this_len <= 0:
+            continue
+        end = off + this_len
+        w = window_f32[:this_len]
+        out[:, off:end] = out[:, off:end] + frames_flat[k, :, :this_len] * w.reshape(1, -1)
+        sum_weight[off:end] = sum_weight[off:end] + w
+    out = out / mx.maximum(sum_weight.reshape(1, -1), 1e-11)
+    return out.reshape(*prefix_shape, total_samples).astype(frames.dtype)
+
+
+
+def fused_overlap_add(
+    frames: mx.array,
+    window: mx.array,
+    step: int,
+    total_samples: int,
+) -> mx.array:
+    """Fused parallel overlap-add across overlapping audio chunks.
+
+    Args:
+        frames: Shape (num_chunks, ..., chunk_len) containing processed audio chunks.
+        window: Shape (chunk_len,) weighting / analysis-synthesis window.
+        step: Hop size / stride between consecutive chunk offsets (must be > 0).
+        total_samples: Target output length in samples along the time axis.
+
+    Returns:
+        Array of shape (..., total_samples) normalized by the accumulated window.
+    """
+    if step <= 0:
+        raise ValueError(f"step must be positive, got {step}")
+
+    orig_shape = frames.shape
+    if len(orig_shape) < 2:
+        raise ValueError(f"frames must have at least 2 dimensions, got {orig_shape}")
+
+    num_chunks = orig_shape[0]
+    prefix_shape = orig_shape[1:-1]
+    chunk_len = orig_shape[-1]
+
+    if num_chunks == 0 or total_samples == 0:
+        return mx.zeros((*prefix_shape, total_samples), dtype=frames.dtype)
+
+    if not HAS_METAL:
+        return _overlap_add_fallback(frames, window, step, total_samples)
+
+    num_channels = 1
+    for s in prefix_shape:
+        num_channels *= s
+
+    frames_flat = mx.contiguous(frames.reshape(num_chunks, num_channels, chunk_len))
+    window_contig = mx.contiguous(window)
+    params = mx.array([total_samples, chunk_len, step, num_chunks, num_channels], dtype=mx.int32)
+
+    tg_x = min(256, total_samples)
+    kernel = _get_overlap_add_kernel()
+    result = kernel(
+        inputs=[frames_flat, window_contig, params],
+        template=[("T", frames.dtype)],
+        grid=(total_samples, num_channels, 1),
+        threadgroup=(tg_x, 1, 1),
+        output_shapes=[(num_channels * total_samples,)],
+        output_dtypes=[frames.dtype],
+    )[0]
+
+    return result.reshape(*prefix_shape, total_samples)
+
