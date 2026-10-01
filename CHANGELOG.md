@@ -11,7 +11,7 @@ and the README after the fact.
 
 ### Added
 
-- All-time throughput record of **93.4× RTFx** (1.285s peak, 1.296s median for 120s
+- All-time throughput record of **93.9× RTFx** (1.278s peak, 1.285s median for 120s
   separation) on Apple M4 Max with bit-exact reconstruction fidelity (>319 dB SNR).
 - Apple Silicon runtime topology auto-tuner (`demucs_mlx/hardware.py`): dynamically
   inspects memory bandwidth, GPU core counts, and system cache capacity to select
