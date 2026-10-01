@@ -445,27 +445,88 @@ class DConv(nn.Module):
     def __call__(self, x: mx.array) -> mx.array:
         layers = self.layers
         compile_enabled = os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1").strip().lower()
-        if (
-            not self.training
-            and self._compile_inference
-            and compile_enabled not in {"0", "false", "no", "off"}
-        ):
-            signatures = tuple(_dconv_block_signature(layer) for layer in layers)
-            if self._compiled_signatures != signatures:
-                previous = self._compiled_layers or []
-                self._compiled_layers = [
-                    previous[index]
-                    if self._compiled_signatures is not None
-                    and index < len(previous)
-                    and self._compiled_signatures[index] == signature
-                    else _compile_dconv_block(layer)
-                    for index, (layer, signature) in enumerate(zip(layers, signatures))
-                ]
-                self._compiled_signatures = signatures
-            layers = self._compiled_layers
+        use_nlc = not self.training and self._compile_inference and _can_use_dconv_nlc(layers)
+        if use_nlc:
+            if compile_enabled not in {"0", "false", "no", "off"}:
+                signature = _dconv_chain_signature(layers)
+                if self._compiled_signatures != signature:
+                    self._compiled_layers = _compile_dconv_chain(layers)
+                    self._compiled_signatures = signature
+                return self._compiled_layers(x)
+            return _dconv_chain_forward_nlc(layers, x)
         for layer in layers:
             x = x + layer(x)
         return x
+
+
+def _can_use_dconv_nlc(layers: list[nn.Module]) -> bool:
+    """Check if all blocks in DConv have standard 7-layer structure without custom attention/LSTM."""
+    for block in layers:
+        if not hasattr(block, "layers") or len(block.layers) != 7:
+            return False
+        # Expected modules: Conv1dNCL, norm, act, Conv1dNCL, norm, glu, LayerScale
+        if not hasattr(block.layers[0], "conv") or not hasattr(block.layers[3], "conv"):
+            return False
+        if not hasattr(block.layers[6], "scale"):
+            return False
+    return True
+
+
+def _dconv_block_forward_nlc(block: nn.Module, x_nlc: mx.array) -> mx.array:
+    """Forward pass of a single DConv block in native NLC channels-last layout."""
+    N, L, C = x_nlc.shape
+    conv1 = block.layers[0].conv
+    norm1 = block.layers[1]
+    conv2 = block.layers[3].conv
+    norm2 = block.layers[4]
+    scale = block.layers[6].scale
+
+    # Conv 1 in native NLC layout
+    h = conv1(x_nlc)
+    hidden = h.shape[-1]
+
+    # Norm 1 via fast layer_norm
+    eps1 = getattr(norm1, "eps", 1e-5)
+    h_norm = mx.fast.layer_norm(h.reshape(N, 1, -1), None, None, eps1).reshape(N, L, hidden)
+    if getattr(norm1, "affine", True) and getattr(norm1, "weight", None) is not None:
+        h_norm = h_norm * norm1.weight[None, None, :] + norm1.bias[None, None, :]
+    h_act = nn.gelu(h_norm)
+
+    # Conv 2 in native NLC layout
+    out = conv2(h_act)
+    out_c = out.shape[-1]
+
+    # Norm 2 via fast layer_norm
+    eps2 = getattr(norm2, "eps", 1e-5)
+    out_norm = mx.fast.layer_norm(out.reshape(N, 1, -1), None, None, eps2).reshape(N, L, out_c)
+    if getattr(norm2, "affine", True) and getattr(norm2, "weight", None) is not None:
+        out_norm = out_norm * norm2.weight[None, None, :] + norm2.bias[None, None, :]
+
+    # GLU along last dimension
+    a, b = mx.split(out_norm, 2, axis=-1)
+    glu_out = a * mx.sigmoid(b)
+    return glu_out * scale[None, None, :]
+
+
+def _dconv_chain_forward_nlc(layers: list[nn.Module], x_ncl: mx.array) -> mx.array:
+    """Run all DConv blocks with single input/output transposes, avoiding internal layout conversion."""
+    x_nlc = x_ncl.transpose(0, 2, 1)
+    for block in layers:
+        x_nlc = x_nlc + _dconv_block_forward_nlc(block, x_nlc)
+    return x_nlc.transpose(0, 2, 1)
+
+
+def _compile_dconv_chain(layers: list[nn.Module]):
+    """Compile the entire DConv chain in native NLC layout."""
+    def forward(value):
+        return _dconv_chain_forward_nlc(layers, value)
+
+    return mx.compile(forward)
+
+
+def _dconv_chain_signature(layers: list[nn.Module]) -> tuple[int, ...]:
+    """Invalidate captured weights when any block in the chain is edited."""
+    return tuple(_dconv_block_signature(layer) for layer in layers)
 
 
 def _compile_dconv_block(block: nn.Module):
