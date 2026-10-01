@@ -89,7 +89,8 @@ def save_audio(wav,
                samplerate: int,
                clip: tp.Literal["rescale", "clamp", "tanh", "none"] = 'rescale',
                bits_per_sample: tp.Literal[16, 24, 32] = 16,
-               as_float: bool = False):
+               as_float: bool = False,
+               layout: str = "channels_first"):
     """
     Save audio file using mlx_audio_io.
     Supports np.ndarray, mlx.core.array, and torch.Tensor.
@@ -103,22 +104,24 @@ def save_audio(wav,
     else:
         encoding = "pcm16" if bits_per_sample == 16 else "float32"
 
+    save_layout = layout if getattr(wav, "ndim", 2) > 1 else "channels_last"
+
     # --- MLX HANDLING (Optimized) ---
     if isinstance(wav, mx.array):
         wav_mx = _prevent_clip_mlx(wav, mode=clip)
-        mac.save(str(path), wav_mx, samplerate, encoding=encoding, clip=(clip != 'none'))
+        mac.save(str(path), wav_mx, samplerate, layout=save_layout, encoding=encoding, clip=(clip != 'none'))
     # --- NUMPY HANDLING ---
     elif isinstance(wav, np.ndarray):
         wav_np = wav
         if np.issubdtype(wav_np.dtype, np.floating):
             wav_np = _prevent_clip_numpy(wav_np, mode=clip)
-        mac.save(str(path), wav_np, samplerate, encoding=encoding, clip=False)
+        mac.save(str(path), wav_np, samplerate, layout=save_layout, encoding=encoding, clip=False)
     # --- TORCH HANDLING (lazy import) ---
     else:
         import torch
         if isinstance(wav, torch.Tensor):
             wav = prevent_clip(wav, mode=clip)
             wav_np = wav.detach().cpu().numpy()
-            mac.save(str(path), wav_np, samplerate, encoding=encoding, clip=False)
+            mac.save(str(path), wav_np, samplerate, layout=save_layout, encoding=encoding, clip=False)
         else:
             raise TypeError(f"Unsupported audio type: {type(wav)}")

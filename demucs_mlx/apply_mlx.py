@@ -19,7 +19,12 @@ _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
 _COMPILED_FORWARDS: dict[int, tuple[weakref.ReferenceType, dict]] = {}
 
 
-def _forward(model: tp.Any, x: mx.array, compile: tp.Optional[bool] = None) -> mx.array:
+def _forward(
+    model: tp.Any,
+    x: mx.array,
+    compile: tp.Optional[bool] = None,
+    **kwargs: tp.Any,
+) -> mx.array:
     """Optionally compile repeated GPU forward shapes after an eager first call."""
     if compile is None:
         enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
@@ -28,7 +33,7 @@ def _forward(model: tp.Any, x: mx.array, compile: tp.Optional[bool] = None) -> m
     else:
         enabled = bool(compile)
     if not enabled or getattr(model, "_ane_time_conv", None) is not None:
-        return model(x)
+        return model(x, **kwargs)
 
     model_id = id(model)
     slot = _COMPILED_FORWARDS.get(model_id)
@@ -273,6 +278,107 @@ def apply_model(
             std_valid_len = model.valid_length(segment_length)
         else:
             std_valid_len = segment_length
+
+        # Check if ANE worker is present for pipelined prefetching
+        ane_worker = getattr(model, "_ane_time_conv", None)
+        if ane_worker is None and hasattr(model, "models") and len(model.models) > 0:
+            ane_worker = getattr(model.models[0], "_ane_time_conv", None)
+
+        if ane_worker is not None:
+            batches_indices = []
+            current = []
+            tail_indices = []
+            for i, offset in enumerate(offsets):
+                this_chunk_len = min(segment_length, length - offset)
+                if this_chunk_len == segment_length:
+                    current.append((i, offset))
+                    if len(current) >= batch_size:
+                        batches_indices.append(current)
+                        current = []
+                else:
+                    tail_indices.append((i, offset, this_chunk_len))
+            if current:
+                batches_indices.append(current)
+
+            def prepare_batch(group):
+                inputs = []
+                indices = []
+                for i, offset in group:
+                    chunk = TensorChunk(mix_chunk, offset, segment_length)
+                    padded = chunk.padded(std_valid_len)
+                    inputs.append(padded)
+                    indices.append(i)
+                stacked = mx.stack(inputs)
+                b_seg, b_audio, ch, l = stacked.shape
+                flat = stacked.reshape(b_seg * b_audio, ch, l)
+                mx.eval(flat)
+                return flat, indices, b_seg, b_audio
+
+            try:
+                next_batch_data = None
+                next_fut = None
+                if batches_indices:
+                    next_batch_data = prepare_batch(batches_indices[0])
+                    next_fut = ane_worker.submit(next_batch_data[0])
+
+                for b_idx in range(len(batches_indices)):
+                    flat, indices, b_seg, b_audio = next_batch_data
+                    curr_fut = next_fut
+
+                    if b_idx + 1 < len(batches_indices):
+                        next_batch_data = prepare_batch(batches_indices[b_idx + 1])
+                        next_fut = ane_worker.submit(next_batch_data[0])
+                    else:
+                        next_batch_data = None
+                        next_fut = None
+
+                    batch_out_flat = _forward(model, flat, compile=compile, ane_future=curr_fut)
+                    _, sources, out_c, out_t = batch_out_flat.shape
+                    batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
+
+                    for i, idx in enumerate(indices):
+                        chunk_out = center_trim(batch_out[i], segment_length)
+                        offset = offsets[idx]
+                        end = offset + segment_length
+                        if _USE_SAFE_SLICE_ACCUMULATION:
+                            update = weight.reshape(1, 1, 1, -1) * chunk_out
+                            out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
+                            sum_weight[offset:end] = sum_weight[offset:end] + weight
+                        else:
+                            out = out.at[:, :, :, offset:end].add(weight.reshape(1, 1, 1, -1) * chunk_out)
+                            sum_weight = sum_weight.at[offset:end].add(weight)
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+
+                    mx.async_eval(out, sum_weight)
+
+                for i, offset, this_chunk_len in tail_indices:
+                    chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
+                    valid_len = model.valid_length(this_chunk_len) if hasattr(model, "valid_length") else this_chunk_len
+                    padded = chunk.padded(valid_len)
+                    chunk_out = _forward(model, padded, compile=compile)
+                    chunk_out = center_trim(chunk_out, this_chunk_len)
+                    end = offset + this_chunk_len
+                    w = weight[:this_chunk_len].reshape(1, 1, 1, -1)
+                    if _USE_SAFE_SLICE_ACCUMULATION:
+                        out[:, :, :, offset:end] = out[:, :, :, offset:end] + w * chunk_out
+                        sum_weight[offset:end] = sum_weight[offset:end] + weight[:this_chunk_len]
+                    else:
+                        out = out.at[:, :, :, offset:end].add(w * chunk_out)
+                        sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
+                    mx.async_eval(out, sum_weight)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+            finally:
+                if progress_bar is not None:
+                    progress_bar.close()
+
+            if bool(mx.any(sum_weight == 0).item()):
+                raise ValueError("sum_weight has zeros; check segment and overlap settings")
+
+            out = out / sum_weight
+            mx.eval(out)
+            return out
 
         def flush_batch():
             nonlocal batch_inputs, batch_indices, out, sum_weight
