@@ -205,11 +205,12 @@ def apply_model(
                 elif out.shape[-1] > min_length:
                     out = out[..., :min_length]
                 estimates = estimates + out
+            mx.async_eval(estimates)
 
         # Vectorized normalization by totals.
         denom = mx.array(totals, dtype=estimates.dtype).reshape(1, -1, 1, 1)
         estimates = estimates / denom
-        mx.eval(estimates)  # Single eval for entire BagOfModels path
+        mx.eval(estimates)  # Final sync eval for BagOfModels path
         return estimates
 
     if source_index is not None:
@@ -234,8 +235,9 @@ def apply_model(
                 compile=compile,
             )
             out = out + shifted_out[..., max_shift - offset:]
+            mx.async_eval(out)
         out = out / shifts
-        mx.eval(out)  # Single eval after all shifts
+        mx.eval(out)  # Final sync eval after all shifts
         return out
 
     if split:
@@ -316,7 +318,7 @@ def apply_model(
                     if progress_bar is not None:
                         progress_bar.update(1)
 
-            mx.eval(out, sum_weight)
+            mx.async_eval(out, sum_weight)
             batch_inputs = []
             batch_indices = []
 
@@ -357,7 +359,7 @@ def apply_model(
                     else:
                         out = out.at[:, :, :, offset:end].add(w * chunk_out)
                         sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
-                    mx.eval(out, sum_weight)  # Eval to bound graph size
+                    mx.async_eval(out, sum_weight)  # Async eval to bound graph size without blocking
                     if progress_bar is not None:
                         progress_bar.update(1)
 
