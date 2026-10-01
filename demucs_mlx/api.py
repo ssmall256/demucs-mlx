@@ -53,8 +53,8 @@ class Separator:
                 raise ValueError("ANE waveform path requires 7.8-second segments")
             if not split:
                 raise ValueError("ANE waveform path requires split=True")
-            if int(batch_size) not in (1, 2):
-                raise ValueError("ANE waveform path requires batch_size 1 or 2")
+            if int(batch_size) <= 0:
+                raise ValueError("ANE waveform path requires batch_size > 0")
         if seed is not None:
             try:
                 seed = int(seed)

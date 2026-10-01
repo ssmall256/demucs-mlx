@@ -406,6 +406,11 @@ class WaveformConv:
             else:
                 self._has_output_backings = False
 
+        self._out_pad_buf: dict[str, np.ndarray] = {
+            name: np.empty(shape, dtype=np_dtype)
+            for name, (shape, _, np_dtype) in self._output_specs.items()
+        }
+
         self.model = model
         self.busy_seconds = 0.0
         self.wait_seconds = 0.0
@@ -418,8 +423,8 @@ class WaveformConv:
     def submit(self, mix: np.ndarray | tp.Any) -> Future:
         if not isinstance(mix, np.ndarray):
             mix = np.array(mix, copy=False)
-        if mix.ndim != 3 or mix.shape[1:] != (2, LENGTH) or mix.shape[0] not in (1, 2):
-            raise ValueError(f"ANE convolution expects (1 or 2, 2, {LENGTH}), got {mix.shape}")
+        if mix.ndim != 3 or mix.shape[1:] != (2, LENGTH) or mix.shape[0] < 1:
+            raise ValueError(f"ANE convolution expects (N, 2, {LENGTH}), got {mix.shape}")
         return self._submit(mix)
 
     def _submit(self, mix: np.ndarray) -> Future:
@@ -448,9 +453,19 @@ class WaveformConv:
             except BaseException as exc:
                 future.set_exception(exc)
 
-    def _predict(self, data: np.ndarray):
-        coreml = self._coreml
+    def _predict(self, data: np.ndarray, out_target: np.ndarray | None = None):
         count = len(data)
+        if count > 2:
+            if out_target is None:
+                shape = (count,) + self._output_specs[self._output_names[0]][0][1:]
+                np_dtype = self._output_specs[self._output_names[0]][2]
+                out_target = np.empty(shape, dtype=np_dtype)
+            for start in range(0, count, 2):
+                chunk = data[start : min(start + 2, count)]
+                self._predict(chunk, out_target=out_target[start : min(start + 2, count)])
+            return out_target
+
+        coreml = self._coreml
         if count == 1:
             self._in_pad_buf[0] = data[0]
             self._in_pad_buf[1] = data[0]
@@ -479,7 +494,10 @@ class WaveformConv:
             backings = {}
             for name in self._output_names:
                 shape, c_dtype, np_dtype = self._output_specs[name]
-                out_buf = np.empty(shape, dtype=np_dtype)
+                if out_target is not None and count == 2:
+                    out_buf = out_target
+                else:
+                    out_buf = self._out_pad_buf[name]
                 output_buffers[name] = out_buf
                 strides = [s // out_buf.itemsize for s in out_buf.strides]
                 ma, err = (
@@ -496,6 +514,9 @@ class WaveformConv:
             result, error = self.model.predictionFromFeatures_options_error_(features, options, None)
             if result is None:
                 raise RuntimeError(f"Core ML prediction with output backings failed: {error}")
+            if out_target is not None and count == 1:
+                out_target[0] = self._out_pad_buf[self._output_names[0]][0]
+                return out_target
             outputs = [output_buffers[name][:count] for name in self._output_names]
             return outputs[0] if len(outputs) == 1 else tuple(outputs)
 

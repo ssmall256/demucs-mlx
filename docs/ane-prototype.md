@@ -14,7 +14,7 @@ stages failed the required fidelity. A single-stem ANE experiment would need
 its own weight-bound full-model asset, operation placement check, output parity,
 and end-to-end timing before it could become a runtime option.
 
-The converter uses the official checkpoint through `get_restricted_demucs_model`, global waveform normalization, and an exact tiling of the first stride-4 convolution. The 343,980-sample input becomes seven overlapping 49,144-sample convolutions in one fixed-shape Core ML model. The overlap preserves every output sample, including boundaries. The compiled model and manifest live under `~/.cache/demucs-mlx/ane/`; the manifest checks the validated MLX safetensors SHA-256 before inference. Conversion and inference require macOS. Only the default `htdemucs`, 7.8-second split segments, and batch sizes 1 or 2 are accepted.
+The converter uses the official checkpoint through `get_restricted_demucs_model`, global waveform normalization, and an exact tiling of the first stride-4 convolution. The 343,980-sample input becomes seven overlapping 49,144-sample convolutions in one fixed-shape Core ML model. The overlap preserves every output sample, including boundaries. The compiled model and manifest live under `~/.cache/demucs-mlx/ane/`; the manifest checks the validated MLX safetensors SHA-256 before inference. Conversion and inference require macOS. The default `htdemucs`, 7.8-second split segments, and arbitrary batch sizes ($N \ge 1$, including batch sizes 2, 4, and 8 via zero-copy direct buffer chunking) are supported.
 
 ```bash
 uv sync --frozen --extra ane --extra ane-convert
