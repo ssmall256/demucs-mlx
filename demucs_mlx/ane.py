@@ -14,6 +14,7 @@ import shutil
 import sys
 import threading
 import time
+import typing as tp
 from concurrent.futures import Future
 from pathlib import Path
 
@@ -354,6 +355,28 @@ class WaveformConv:
         )
         if model is None:
             raise RuntimeError(f"Core ML could not load {self.path}: {error}")
+        desc = model.modelDescription()
+        in_desc = desc.inputDescriptionsByName().get(input_name)
+        if in_desc and in_desc.multiArrayConstraint():
+            in_shape = tuple(int(s) for s in in_desc.multiArrayConstraint().shape())
+        else:
+            in_shape = (BATCH, 2, LENGTH)
+        self._in_pad_buf = np.empty(in_shape, dtype=np.float32)
+
+        self._has_output_backings = hasattr(CoreML.MLPredictionOptions, "setOutputBackings_")
+        self._output_specs: dict[str, tuple[tuple[int, ...], int, type]] = {}
+        out_descs = desc.outputDescriptionsByName()
+        for name in output_names:
+            fdesc = out_descs.get(name)
+            if fdesc and fdesc.multiArrayConstraint():
+                c = fdesc.multiArrayConstraint()
+                shape = tuple(int(s) for s in c.shape())
+                c_dtype = c.dataType()
+                np_dtype = np.float16 if c_dtype == CoreML.MLMultiArrayDataTypeFloat16 else np.float32
+                self._output_specs[name] = (shape, c_dtype, np_dtype)
+            else:
+                self._has_output_backings = False
+
         self.model = model
         self.busy_seconds = 0.0
         self.wait_seconds = 0.0
@@ -363,7 +386,9 @@ class WaveformConv:
         self._worker = threading.Thread(target=self._run, daemon=True, name="demucs-ane")
         self._worker.start()
 
-    def submit(self, mix: np.ndarray) -> Future:
+    def submit(self, mix: np.ndarray | tp.Any) -> Future:
+        if not isinstance(mix, np.ndarray):
+            mix = np.array(mix, copy=False)
         if mix.ndim != 3 or mix.shape[1:] != (2, LENGTH) or mix.shape[0] not in (1, 2):
             raise ValueError(f"ANE convolution expects (1 or 2, 2, {LENGTH}), got {mix.shape}")
         return self._submit(mix)
@@ -398,7 +423,12 @@ class WaveformConv:
         coreml = self._coreml
         count = len(data)
         if count == 1:
-            data = np.concatenate((data, data), axis=0)
+            self._in_pad_buf[0] = data[0]
+            self._in_pad_buf[1] = data[0]
+            data = self._in_pad_buf
+        elif not data.flags.c_contiguous:
+            data = np.ascontiguousarray(data)
+
         init_array = (
             coreml.MLMultiArray.alloc()
             .initWithDataPointer_shape_dataType_strides_deallocator_error_
@@ -414,6 +444,32 @@ class WaveformConv:
         )
         if features is None:
             raise RuntimeError(f"Could not create Core ML input features: {error}")
+
+        if self._has_output_backings:
+            output_buffers = {}
+            backings = {}
+            for name in self._output_names:
+                shape, c_dtype, np_dtype = self._output_specs[name]
+                out_buf = np.empty(shape, dtype=np_dtype)
+                output_buffers[name] = out_buf
+                strides = [s // out_buf.itemsize for s in out_buf.strides]
+                ma, err = (
+                    coreml.MLMultiArray.alloc()
+                    .initWithDataPointer_shape_dataType_strides_deallocator_error_(
+                        out_buf, list(shape), c_dtype, strides, None, None
+                    )
+                )
+                if ma is None:
+                    raise RuntimeError(f"Could not create Core ML output backing for {name}: {err}")
+                backings[name] = ma
+            options = coreml.MLPredictionOptions.alloc().init()
+            options.setOutputBackings_(backings)
+            result, error = self.model.predictionFromFeatures_options_error_(features, options, None)
+            if result is None:
+                raise RuntimeError(f"Core ML prediction with output backings failed: {error}")
+            outputs = [output_buffers[name][:count] for name in self._output_names]
+            return outputs[0] if len(outputs) == 1 else tuple(outputs)
+
         result, error = self.model.predictionFromFeatures_error_(features, None)
         if result is None:
             raise RuntimeError(f"Core ML prediction failed: {error}")
@@ -426,15 +482,18 @@ class WaveformConv:
             }[y.dataType()]
             shape = tuple(int(s) for s in y.shape())
             strides = tuple(int(s) for s in y.strides())
-            held = {}
-
-            def grab(raw, size):
-                held["flat"] = np.frombuffer(
-                    raw, dtype=dtype, count=size // np.dtype(dtype).itemsize
-                ).copy()
-
-            y.getBytesWithHandler_(grab)
-            flat = held["flat"]
+            dp = y.dataPointer()
+            if hasattr(dp, "as_buffer"):
+                raw = dp.as_buffer(y.count() * np.dtype(dtype).itemsize)
+                flat = np.frombuffer(raw, dtype=dtype)
+            else:
+                held = {}
+                def grab(raw_bytes, size):
+                    held["flat"] = np.frombuffer(
+                        raw_bytes, dtype=dtype, count=size // np.dtype(dtype).itemsize
+                    ).copy()
+                y.getBytesWithHandler_(grab)
+                flat = held["flat"]
             view = np.lib.stride_tricks.as_strided(
                 flat, shape, [stride * flat.itemsize for stride in strides]
             )
@@ -467,7 +526,9 @@ class WaveformTail(WaveformConv):
             raise RuntimeError("Core ML waveform tail asset has no Neural Engine placement")
         self._init_coreml(manifest["placement"], "conv0", ("y1", "y2", "y3"))
 
-    def submit(self, encoded: np.ndarray) -> Future:
+    def submit(self, encoded: np.ndarray | tp.Any) -> Future:
+        if not isinstance(encoded, np.ndarray):
+            encoded = np.array(encoded, copy=False)
         if encoded.ndim != 3 or encoded.shape[1:] != (48, 85_995) or encoded.shape[0] not in (1, 2):
             raise ValueError(
                 f"ANE waveform tail expects (1 or 2, 48, 85995), got {encoded.shape}"
