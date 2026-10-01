@@ -312,6 +312,14 @@ def apply_model(
         if current:
             batches_indices.append(current)
 
+        compile_enabled = (
+            bool(compile)
+            if compile is not None
+            else os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+                "0", "false", "no", "off",
+            }
+        )
+
         def prepare_batch(group):
             inputs = []
             for i, offset, this_chunk_len in group:
@@ -319,7 +327,7 @@ def apply_model(
                 padded = chunk.padded(std_valid_len)
                 inputs.append(padded)
             actual_count = len(inputs)
-            if compile and len(batches_indices) > 1 and actual_count < effective_batch_size:
+            if compile_enabled and len(batches_indices) > 1 and actual_count < effective_batch_size:
                 while len(inputs) < effective_batch_size:
                     inputs.append(inputs[-1])
             stacked = mx.stack(inputs)
