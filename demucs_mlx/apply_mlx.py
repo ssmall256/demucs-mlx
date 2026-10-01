@@ -15,6 +15,7 @@ from packaging import version
 
 from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_utils import center_trim
+from .metal_kernels import fused_overlap_add
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
 _COMPILED_FORWARDS: dict[int, tuple[weakref.ReferenceType, dict]] = {}
@@ -145,7 +146,7 @@ def apply_model(
     progress: bool = False,
     num_workers: int = 0,
     segment: tp.Optional[float] = None,
-    batch_size: int = DEFAULT_BATCH_SIZE,
+    batch_size: tp.Union[int, str] = DEFAULT_BATCH_SIZE,
     seed: tp.Optional[int] = None,
     _rng: tp.Optional[random.Random] = None,
     *,
@@ -259,9 +260,6 @@ def apply_model(
         return out
 
     if split:
-        out = mx.zeros((batch, len(model.sources), channels, length), dtype=mix_dtype)
-        sum_weight = mx.zeros((length,), dtype=mix_dtype)
-
         if segment is None:
             segment = model.segment
         segment_length = int(model.samplerate * segment)
@@ -285,8 +283,14 @@ def apply_model(
             progress_bar = tqdm(total=len(offsets), desc="segments", unit="seg", leave=False)
 
         # --- BATCHING STATE ---
-        batch_inputs = []
-        batch_indices = []
+        if batch_size is None or str(batch_size).lower() == "auto":
+            from .hardware import optimal_batch_size
+            effective_batch_size = optimal_batch_size()
+        else:
+            effective_batch_size = int(batch_size)
+            if effective_batch_size <= 0:
+                raise ValueError("batch_size must be > 0.")
+
         if hasattr(model, "valid_length"):
             std_valid_len = model.valid_length(segment_length)
         else:
@@ -302,7 +306,7 @@ def apply_model(
         for i, offset in enumerate(offsets):
             this_chunk_len = min(segment_length, length - offset)
             current.append((i, offset, this_chunk_len))
-            if len(current) >= batch_size:
+            if len(current) >= effective_batch_size:
                 batches_indices.append(current)
                 current = []
         if current:
@@ -315,15 +319,17 @@ def apply_model(
                 padded = chunk.padded(std_valid_len)
                 inputs.append(padded)
             actual_count = len(inputs)
-            if compile and len(batches_indices) > 1 and actual_count < batch_size:
-                while len(inputs) < batch_size:
+            if compile and len(batches_indices) > 1 and actual_count < effective_batch_size:
+                while len(inputs) < effective_batch_size:
                     inputs.append(inputs[-1])
             stacked = mx.stack(inputs)
             b_seg, b_audio, ch, l = stacked.shape
             flat = stacked.reshape(b_seg * b_audio, ch, l)
-            mx.eval(flat)
+            if ane_worker is not None:
+                mx.eval(flat)
             return flat, group, actual_count, b_seg, b_audio
 
+        all_chunk_outputs = []
         try:
             next_batch_data = None
             next_fut = None
@@ -351,39 +357,46 @@ def apply_model(
                     ane_worker.wait_seconds += time.perf_counter() - wait_start
                     transfer_start = time.perf_counter()
                     conv_mx = mx.asarray(conv, copy=False)
-                    mx.eval(conv_mx)
                     ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
                 batch_out_flat = _forward(model, flat, compile=compile, precomputed_conv=conv_mx)
                 _, sources, out_c, out_t = batch_out_flat.shape
                 batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
 
-                for i in range(actual_count):
-                    idx, offset, this_chunk_len = group[i]
-                    chunk_out = center_trim(batch_out[i], this_chunk_len)
-                    end = offset + this_chunk_len
-                    w = weight[:this_chunk_len].reshape(1, 1, 1, -1)
-                    if _USE_SAFE_SLICE_ACCUMULATION:
-                        update = w * chunk_out
-                        out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
-                        sum_weight[offset:end] = sum_weight[offset:end] + weight[:this_chunk_len]
-                    else:
-                        out = out.at[:, :, :, offset:end].add(w * chunk_out)
-                        sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
-                    if progress_bar is not None:
-                        progress_bar.update(1)
+                if actual_count == b_seg and all(cl == out_t for _, _, cl in group):
+                    all_chunk_outputs.append(batch_out)
+                else:
+                    for i in range(actual_count):
+                        idx, offset, this_chunk_len = group[i]
+                        chunk_out = batch_out[i : i + 1]
+                        if this_chunk_len < out_t:
+                            chunk_trimmed = center_trim(batch_out[i], this_chunk_len)
+                            pad_r = out_t - this_chunk_len
+                            chunk_out = mx.pad(
+                                chunk_trimmed, [(0, 0), (0, 0), (0, 0), (0, pad_r)]
+                            )[None, ...]
+                        all_chunk_outputs.append(chunk_out)
 
-                mx.async_eval(out, sum_weight)
+                if progress_bar is not None:
+                    progress_bar.update(actual_count)
+
+                mx.async_eval(batch_out)
         finally:
             if progress_bar is not None:
                 progress_bar.close()
 
-        if bool(mx.any(sum_weight == 0).item()):
-            raise ValueError("sum_weight has zeros; check segment and overlap settings")
-
-        out = out / sum_weight
+        if all_chunk_outputs:
+            stacked_frames = (
+                mx.concatenate(all_chunk_outputs, axis=0)
+                if len(all_chunk_outputs) > 1
+                else all_chunk_outputs[0]
+            )
+            out = fused_overlap_add(stacked_frames, weight, stride, length)
+        else:
+            out = mx.zeros((batch, len(model.sources), channels, length), dtype=mix_dtype)
         mx.eval(out)
         return out
+
 
     # No split path
     valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length

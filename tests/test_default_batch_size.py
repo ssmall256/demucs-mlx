@@ -19,21 +19,25 @@ class _FakeModel:
 
 
 def main() -> None:
-    assert DEFAULT_BATCH_SIZE == 2
+    from demucs_mlx.hardware import optimal_batch_size
+
+    assert DEFAULT_BATCH_SIZE == "auto"
     assert inspect.signature(Separator).parameters["batch_size"].default == DEFAULT_BATCH_SIZE
     assert inspect.signature(apply_model).parameters["batch_size"].default == DEFAULT_BATCH_SIZE
 
     parser = _build_parser()
     assert parser.parse_args(["track.wav"]).batch_size == DEFAULT_BATCH_SIZE
     assert parser.parse_args(["track.wav", "--batch-size", "3"]).batch_size == 3
+    assert parser.parse_args(["track.wav", "--batch-size", "auto"]).batch_size == "auto"
 
     from demucs_mlx import model_converter
 
     original_get_mlx_model = model_converter.get_mlx_model
     model_converter.get_mlx_model = lambda _name: _FakeModel()
     try:
-        assert Separator().batch_size == DEFAULT_BATCH_SIZE
+        assert Separator().batch_size == optimal_batch_size()
         assert Separator(batch_size=3).batch_size == 3
+        assert Separator(batch_size="auto").batch_size == optimal_batch_size()
         try:
             Separator(batch_size=0)
         except ValueError:

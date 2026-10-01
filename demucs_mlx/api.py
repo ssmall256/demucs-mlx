@@ -20,12 +20,13 @@ class Separator:
         seed: tp.Optional[int] = None,
         jobs: int = 0,
         progress: bool = False,
-        batch_size: int = DEFAULT_BATCH_SIZE,
+        batch_size: tp.Optional[int | str] = DEFAULT_BATCH_SIZE,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
         ane_time_encoder: bool = False,
         stem: tp.Optional[str] = None,
         compile: tp.Optional[bool] = None,
+        auto_tune: bool = False,
     ):
         if model not in MLX_MODEL_REGISTRY:
             known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
@@ -42,8 +43,13 @@ class Separator:
             raise ValueError("overlap must be in [0, 1).")
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
-        if int(batch_size) <= 0:
+        if auto_tune or batch_size is None or batch_size == "auto":
+            from .hardware import optimal_batch_size
+            effective_batch_size = optimal_batch_size()
+        elif int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
+        else:
+            effective_batch_size = int(batch_size)
         if stem is not None and model != "htdemucs_ft":
             raise ValueError("Single-stem acceleration only supports htdemucs_ft")
         if ane_time_encoder:
@@ -53,7 +59,7 @@ class Separator:
                 raise ValueError("ANE waveform path requires 7.8-second segments")
             if not split:
                 raise ValueError("ANE waveform path requires split=True")
-            if int(batch_size) <= 0:
+            if int(effective_batch_size) <= 0:
                 raise ValueError("ANE waveform path requires batch_size > 0")
         if seed is not None:
             try:
@@ -66,7 +72,7 @@ class Separator:
         self.split = split
         self.segment = float(segment) if segment is not None else None
         self.seed = seed
-        self.batch_size = int(batch_size)
+        self.batch_size = effective_batch_size
         self.jobs = jobs
         self.progress = progress
         self.callback = callback
@@ -79,6 +85,14 @@ class Separator:
         self._model = get_mlx_model(model)
         if hasattr(self._model, "eval"):
             self._model.eval()
+            for sub in getattr(self._model, "models", [self._model]):
+                ct = getattr(sub, "crosstransformer", None)
+                if ct is not None:
+                    for layer in getattr(ct, "layers", []) + getattr(ct, "layers_t", []):
+                        for a in ("attn", "cross_attn"):
+                            m = getattr(layer, a, None)
+                            if m is not None and hasattr(m, "_ensure_fused"):
+                                m._ensure_fused()
         if stem is not None and stem not in self._model.sources:
             raise ValueError(f"Unknown stem {stem!r}; available: {', '.join(self._model.sources)}")
         self.stem = stem

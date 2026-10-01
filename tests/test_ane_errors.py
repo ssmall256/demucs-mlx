@@ -22,14 +22,14 @@ def main_test():
     raises(lambda: Separator(model="htdemucs_ft", ane_time_encoder=True), "default htdemucs")
     raises(lambda: Separator(segment=6.0, ane_time_encoder=True), "7.8-second")
     raises(lambda: Separator(split=False, ane_time_encoder=True), "split=True")
-    raises(lambda: Separator(batch_size=3, ane_time_encoder=True), "batch_size 1 or 2")
+    raises(lambda: Separator(batch_size=0, ane_time_encoder=True), "batch_size")
     raises(
         lambda: main(["track.wav", "--ane-time-encoder", "-n", "htdemucs_ft"]),
         "default htdemucs",
     )
     raises(
-        lambda: main(["track.wav", "--ane-time-encoder", "--batch-size", "3"]),
-        "--batch-size 1 or 2",
+        lambda: main(["track.wav", "--ane-time-encoder", "--batch-size", "0"]),
+        "--batch-size must be > 0",
     )
     with TemporaryDirectory() as directory:
         missing = Path(directory) / "missing.mlmodelc"
