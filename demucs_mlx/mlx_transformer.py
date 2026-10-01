@@ -103,6 +103,27 @@ class MyGroupNorm(nn.Module):
         return self.gn(x)
 
 
+class FastMultiHeadAttention(nn.MultiHeadAttention):
+    def __call__(self, queries: mx.array, keys: mx.array, values: mx.array, mask=None) -> mx.array:
+        queries = self.query_proj(queries)
+        keys = self.key_proj(keys)
+        values = self.value_proj(values)
+        heads = self.num_heads
+        queries = mx.unflatten(queries, -1, (heads, -1)).transpose(0, 2, 1, 3)
+        keys = mx.unflatten(keys, -1, (heads, -1)).transpose(0, 2, 1, 3)
+        values = mx.unflatten(values, -1, (heads, -1)).transpose(0, 2, 1, 3)
+        scale = math.sqrt(1 / queries.shape[-1])
+        output = mx.fast.scaled_dot_product_attention(
+            queries.astype(mx.float16),
+            keys.astype(mx.float16),
+            values.astype(mx.float16),
+            scale=scale,
+            mask=mask,
+        )
+        output = output.astype(queries.dtype).transpose(0, 2, 1, 3).flatten(-2, -1)
+        return self.out_proj(output)
+
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(
         self,
@@ -118,7 +139,7 @@ class TransformerEncoderLayer(nn.Module):
         init_values: float = 1e-4,
     ):
         super().__init__()
-        self.attn = nn.MultiHeadAttention(d_model, nhead, bias=True)
+        self.attn = FastMultiHeadAttention(d_model, nhead, bias=True)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
         self.dropout1 = nn.Dropout(dropout)
@@ -169,7 +190,7 @@ class CrossTransformerEncoderLayer(nn.Module):
         init_values: float = 1e-4,
     ):
         super().__init__()
-        self.cross_attn = nn.MultiHeadAttention(d_model, nhead, bias=True)
+        self.cross_attn = FastMultiHeadAttention(d_model, nhead, bias=True)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
         self.dropout1 = nn.Dropout(dropout)
@@ -387,21 +408,30 @@ class CrossTransformerEncoder(nn.Module):
         x = x + self.weight_pos_embed * pos_emb_2d
 
         B, C, T2 = xt.shape
-        xt = xt.transpose(0, 2, 1)
-        pos_emb = self._get_pos_embedding(T2, B, C)
-        pos_emb = pos_emb.transpose(1, 0, 2)
-        xt = self.norm_in_t(xt)
-        xt = xt + self.weight_pos_embed * pos_emb
+        s_side = getattr(self, "_stream_side", None)
+        if s_side is None:
+            s_side = mx.new_stream(mx.default_device())
+            self._stream_side = s_side
+
+        with mx.stream(s_side):
+            xt = xt.transpose(0, 2, 1)
+            pos_emb = self._get_pos_embedding(T2, B, C)
+            pos_emb = pos_emb.transpose(1, 0, 2)
+            xt = self.norm_in_t(xt)
+            xt = xt + self.weight_pos_embed * pos_emb
 
         for idx in range(self.num_layers):
             if idx % 2 == self.classic_parity:
+                with mx.stream(s_side):
+                    xt = self.layers_t[idx](xt)
                 x = self.layers[idx](x)
-                xt = self.layers_t[idx](xt)
             else:
                 old_x = x
+                with mx.stream(s_side):
+                    xt = self.layers_t[idx](xt, old_x)
                 x = self.layers[idx](x, xt)
-                xt = self.layers_t[idx](xt, old_x)
 
+        with mx.stream(s_side):
+            xt = xt.transpose(0, 2, 1)
         x = x.reshape(B, T1, Fr, C).transpose(0, 3, 2, 1)
-        xt = xt.transpose(0, 2, 1)
         return x, xt

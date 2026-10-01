@@ -416,6 +416,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         mix: mx.array,
         *,
         ane_future: tp.Optional[Future] = None,
+        precomputed_conv: tp.Optional[mx.array] = None,
     ) -> mx.array:
         length = mix.shape[-1]
         length_pre_pad = None
@@ -428,7 +429,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         # Private diagnostic hook: the current FP16 tail fails stem fidelity.
         ane_tail = getattr(self, "_ane_time_tail", None)
         ane_tail_future = None
-        if ane_conv is not None:
+        if ane_conv is not None and precomputed_conv is None:
             from .ane import LENGTH
 
             if ane_future is None:
@@ -459,24 +460,102 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         saved_t = []
         lengths = []
         lengths_t = []
-        for idx, encode in enumerate(self.encoder):
-            lengths.append(x.shape[-1])
-            inject = None
-            if ane_future is not None and idx == 3:
-                # First evaluate the independent spectral stages on the GPU.
-                mx.eval(x)
-                if ane_tail_future is not None:
-                    wait_start = time.perf_counter()
-                    tail_outputs = ane_tail_future.result()
-                    ane_tail.wait_seconds += time.perf_counter() - wait_start
-                    transfer_start = time.perf_counter()
-                    tail_mx = tuple(mx.asarray(value, copy=False) for value in tail_outputs)
-                    mx.eval(*tail_mx)
-                    ane_tail.transfer_seconds += time.perf_counter() - transfer_start
-                    lengths_t.extend((85_995, 21_499, 5_375))
-                    saved_t.extend(tail_mx)
-                    xt = tail_mx[-1]
-                else:
+        if precomputed_conv is not None:
+            from .ane import LENGTH
+
+            s_side = getattr(self, "_stream_side", None)
+            if s_side is None:
+                s_side = mx.new_stream(mx.default_device())
+                self._stream_side = s_side
+
+            with mx.stream(s_side):
+                for time_idx, tenc in enumerate(self.tencoder):
+                    lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
+                    xt = tenc(xt, precomputed_conv=precomputed_conv) if time_idx == 0 else tenc(xt)
+                    saved_t.append(xt)
+
+            for idx, encode in enumerate(self.encoder):
+                lengths.append(x.shape[-1])
+                x = encode(x, None)
+                if idx == 0 and self.freq_emb is not None:
+                    frs = mx.arange(x.shape[-2], dtype=mx.int32)
+                    emb = self.freq_emb(frs).transpose(1, 0)[None, :, :, None]
+                    x = x + self.freq_emb_scale * emb
+                saved.append(x)
+        elif ane_future is None:
+            s_side = getattr(self, "_stream_side", None)
+            if s_side is None:
+                s_side = mx.new_stream(mx.default_device())
+                self._stream_side = s_side
+
+            with mx.stream(s_side):
+                for tenc in self.tencoder:
+                    lengths_t.append(xt.shape[-1])
+                    xt = tenc(xt)
+                    saved_t.append(xt)
+
+            for idx, encode in enumerate(self.encoder):
+                lengths.append(x.shape[-1])
+                x = encode(x, None)
+                if idx == 0 and self.freq_emb is not None:
+                    frs = mx.arange(x.shape[-2], dtype=mx.int32)
+                    emb = self.freq_emb(frs).transpose(1, 0)[None, :, :, None]
+                    x = x + self.freq_emb_scale * emb
+                saved.append(x)
+        else:
+            for idx, encode in enumerate(self.encoder):
+                lengths.append(x.shape[-1])
+                inject = None
+                if ane_future is not None and idx == 3:
+                    # First evaluate the independent spectral stages on the GPU.
+                    mx.eval(x)
+                    if ane_tail_future is not None:
+                        wait_start = time.perf_counter()
+                        tail_outputs = ane_tail_future.result()
+                        ane_tail.wait_seconds += time.perf_counter() - wait_start
+                        transfer_start = time.perf_counter()
+                        tail_mx = tuple(mx.asarray(value, copy=False) for value in tail_outputs)
+                        mx.eval(*tail_mx)
+                        ane_tail.transfer_seconds += time.perf_counter() - transfer_start
+                        lengths_t.extend((85_995, 21_499, 5_375))
+                        saved_t.extend(tail_mx)
+                        xt = tail_mx[-1]
+                    else:
+                        wait_start = time.perf_counter()
+                        conv = ane_future.result()
+                        ane_conv.wait_seconds += time.perf_counter() - wait_start
+                        transfer_start = time.perf_counter()
+                        conv_mx = mx.asarray(conv, copy=False)
+                        mx.eval(conv_mx)
+                        ane_conv.transfer_seconds += time.perf_counter() - transfer_start
+                        xt = conv_mx
+                        for time_idx, tenc in enumerate(self.tencoder):
+                            lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
+                            xt = tenc(xt, precomputed_conv=conv_mx) if time_idx == 0 else tenc(xt)
+                            if not tenc.empty:
+                                saved_t.append(xt)
+                            else:
+                                inject = xt
+                elif ane_future is not None and idx < 3:
+                    pass
+                elif idx < len(self.tencoder):
+                    lengths_t.append(xt.shape[-1])
+                    tenc = self.tencoder[idx]
+                    xt = tenc(xt)
+                    if not tenc.empty:
+                        saved_t.append(xt)
+                    else:
+                        inject = xt
+                x = encode(x, inject)
+                if idx == 0 and self.freq_emb is not None:
+                    frs = mx.arange(x.shape[-2], dtype=mx.int32)
+                    emb = self.freq_emb(frs).transpose(1, 0)[None, :, :, None]
+                    x = x + self.freq_emb_scale * emb
+                saved.append(x)
+                if ane_future is not None and ane_tail is not None and idx == 0:
+                    # Finish stage 0 on MLX, then submit the full-length later
+                    # stages while the spectral branch continues on the GPU.
+                    mx.eval(x)
                     wait_start = time.perf_counter()
                     conv = ane_future.result()
                     ane_conv.wait_seconds += time.perf_counter() - wait_start
@@ -484,70 +563,49 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     conv_mx = mx.asarray(conv, copy=False)
                     mx.eval(conv_mx)
                     ane_conv.transfer_seconds += time.perf_counter() - transfer_start
-                    xt = conv_mx
-                    for time_idx, tenc in enumerate(self.tencoder):
-                        lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
-                        xt = tenc(xt, precomputed_conv=conv_mx) if time_idx == 0 else tenc(xt)
-                        if not tenc.empty:
-                            saved_t.append(xt)
-                        else:
-                            inject = xt
-            elif ane_future is not None and idx < 3:
-                pass
-            elif idx < len(self.tencoder):
-                lengths_t.append(xt.shape[-1])
-                tenc = self.tencoder[idx]
-                xt = tenc(xt)
-                if not tenc.empty:
+                    lengths_t.append(LENGTH)
+                    xt = self.tencoder[0](xt, precomputed_conv=conv_mx)
                     saved_t.append(xt)
-                else:
-                    inject = xt
-            x = encode(x, inject)
-            if idx == 0 and self.freq_emb is not None:
-                frs = mx.arange(x.shape[-2], dtype=mx.int32)
-                emb = self.freq_emb(frs).transpose(1, 0)[None, :, :, None]
-                x = x + self.freq_emb_scale * emb
-            saved.append(x)
-            if ane_future is not None and ane_tail is not None and idx == 0:
-                # Finish stage 0 on MLX, then submit the full-length later
-                # stages while the spectral branch continues on the GPU.
-                mx.eval(x)
-                wait_start = time.perf_counter()
-                conv = ane_future.result()
-                ane_conv.wait_seconds += time.perf_counter() - wait_start
-                transfer_start = time.perf_counter()
-                conv_mx = mx.asarray(conv, copy=False)
-                mx.eval(conv_mx)
-                ane_conv.transfer_seconds += time.perf_counter() - transfer_start
-                lengths_t.append(LENGTH)
-                xt = self.tencoder[0](xt, precomputed_conv=conv_mx)
-                saved_t.append(xt)
-                transfer_start = time.perf_counter()
-                ane_tail_future = ane_tail.submit(xt)
-                ane_tail.transfer_seconds += time.perf_counter() - transfer_start
+                    transfer_start = time.perf_counter()
+                    ane_tail_future = ane_tail.submit(xt)
+                    ane_tail.transfer_seconds += time.perf_counter() - transfer_start
+
 
         if self.crosstransformer:
+            s_side = getattr(self, "_stream_side", None)
+            if s_side is None:
+                s_side = mx.new_stream(mx.default_device())
+                self._stream_side = s_side
+
             if self.bottom_channels:
                 b, c, f, t = x.shape
                 x = x.reshape(b, c, f * t)
+                with mx.stream(s_side):
+                    xt = self.channel_upsampler_t(xt)
                 x = self.channel_upsampler(x)
                 x = x.reshape(b, self.bottom_channels, f, t)
-                xt = self.channel_upsampler_t(xt)
             x, xt = self.crosstransformer(x, xt)
             if self.bottom_channels:
                 x = x.reshape(b, self.bottom_channels, f * t)
+                with mx.stream(s_side):
+                    xt = self.channel_downsampler_t(xt)
                 x = self.channel_downsampler(x)
                 x = x.reshape(b, c, f, t)
-                xt = self.channel_downsampler_t(xt)
 
         offset = self.depth - len(self.tdecoder)
         has_empty_tdec = any(t.empty for t in self.tdecoder)
         if not has_empty_tdec:
             # Dual-branch decoders: waveform and spectral decoders are independent skip consumers.
-            for tdec in self.tdecoder:
-                length_t = lengths_t.pop(-1)
-                skip_t = saved_t.pop(-1)
-                xt, _ = tdec(xt, skip_t, length_t)
+            s_side = getattr(self, "_stream_side", None)
+            if s_side is None:
+                s_side = mx.new_stream(mx.default_device())
+                self._stream_side = s_side
+
+            with mx.stream(s_side):
+                for tdec in self.tdecoder:
+                    length_t = lengths_t.pop(-1)
+                    skip_t = saved_t.pop(-1)
+                    xt, _ = tdec(xt, skip_t, length_t)
 
             for idx, decode in enumerate(self.decoder):
                 skip = saved.pop(-1)

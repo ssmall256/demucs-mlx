@@ -39,15 +39,24 @@ def signal(seconds: int) -> np.ndarray:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Thermally gated alternating benchmark")
+    parser.add_argument("--batch-size", type=int, default=4, help="Chunk batch size (default: 4)")
+    parser.add_argument("--compile", action="store_true", help="Enable graph compilation")
+    args = parser.parse_args()
+
+    b_size = args.batch_size
+    comp = args.compile
+
     print("## Thermally Gated Alternating Benchmark (ABBA)", flush=True)
     print("**Protocol:**", flush=True)
     print("- Gated to `nominal` thermal state before every single run", flush=True)
     print("- 5-second physical cooldown between runs to dissipate junction heat", flush=True)
     print("- Balanced alternating order: Round 1 (GPU->ANE), Round 2 (ANE->GPU), Round 3 (ANE->GPU), Round 4 (GPU->ANE)", flush=True)
-    print("- Shifts=1, overlap=0.25, split=True, batch_size=2, seed=481\n", flush=True)
+    print(f"- Shifts=1, overlap=0.25, split=True, batch_size={b_size}, compile={comp}, seed=481\n", flush=True)
 
-    gpu = Separator(seed=481)
-    with Separator(seed=481, ane_time_encoder=True) as ane:
+    gpu = Separator(seed=481, batch_size=b_size, compile=comp)
+    with Separator(seed=481, ane_time_encoder=True, batch_size=b_size, compile=comp) as ane:
         worker = ane._ane_worker
 
         # Warmup

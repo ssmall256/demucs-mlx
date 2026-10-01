@@ -553,12 +553,12 @@ class BagOfModelsMLX:
             for src_idx, w in enumerate(model_weights):
                 self.totals[src_idx] += w
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, **kwargs: tp.Any) -> mx.array:
         """Apply all models and average outputs with per-source weights."""
         estimates = None
 
         for model, model_weights in zip(self.models, self.weights):
-            out = model(x)  # Shape: [batch, sources, channels, time]
+            out = model(x, **kwargs)  # Shape: [batch, sources, channels, time]
 
             # Apply per-source weights - reshape to broadcast correctly
             # weights shape: [sources] -> [1, sources, 1, 1]

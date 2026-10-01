@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import random
+import time
 import typing as tp
 import warnings
 import weakref
@@ -23,6 +24,7 @@ def _forward(
     model: tp.Any,
     x: mx.array,
     compile: tp.Optional[bool] = None,
+    precomputed_conv: tp.Optional[mx.array] = None,
     **kwargs: tp.Any,
 ) -> mx.array:
     """Optionally compile repeated GPU forward shapes after an eager first call."""
@@ -32,8 +34,13 @@ def _forward(
         }
     else:
         enabled = bool(compile)
-    if not enabled or getattr(model, "_ane_time_conv", None) is not None:
-        return model(x, **kwargs)
+    def _call(m, tensor):
+        if precomputed_conv is not None:
+            return m(tensor, precomputed_conv=precomputed_conv, **kwargs)
+        return m(tensor, **kwargs)
+
+    if not enabled or kwargs or (getattr(model, "_ane_time_conv", None) is not None and precomputed_conv is None):
+        return _call(model, x)
 
     model_id = id(model)
     slot = _COMPILED_FORWARDS.get(model_id)
@@ -46,21 +53,27 @@ def _forward(
         try:
             ref = weakref.ref(model, forget)
         except TypeError:
-            return model(x)
+            return _call(model, x)
         slot = (ref, {})
         _COMPILED_FORWARDS[model_id] = slot
     ref, per_shape = slot
-    key = (tuple(x.shape), str(x.dtype), os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1"))
+    conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype)) if precomputed_conv is not None else None
+    key = (tuple(x.shape), str(x.dtype), conv_key, os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1"))
     if key not in per_shape:
         # Spectral tuning may evaluate candidate kernels, which cannot happen
         # inside an MLX compile trace. This useful first call populates it.
         per_shape[key] = None
-        return model(x)
+        return _call(model, x)
 
     compiled = per_shape[key]
     if compiled is None:
-        compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
+        if precomputed_conv is not None:
+            compiled = mx.compile(lambda t, c, _ref=ref: _ref()(t, precomputed_conv=c))
+        else:
+            compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
         per_shape[key] = compiled
+    if precomputed_conv is not None:
+        return compiled(x, precomputed_conv)
     return compiled(x)
 
 
@@ -284,178 +297,70 @@ def apply_model(
         if ane_worker is None and hasattr(model, "models") and len(model.models) > 0:
             ane_worker = getattr(model.models[0], "_ane_time_conv", None)
 
-        if ane_worker is not None:
-            batches_indices = []
-            current = []
-            tail_indices = []
-            for i, offset in enumerate(offsets):
-                this_chunk_len = min(segment_length, length - offset)
-                if this_chunk_len == segment_length:
-                    current.append((i, offset))
-                    if len(current) >= batch_size:
-                        batches_indices.append(current)
-                        current = []
-                else:
-                    tail_indices.append((i, offset, this_chunk_len))
-            if current:
+        batches_indices = []
+        current = []
+        for i, offset in enumerate(offsets):
+            this_chunk_len = min(segment_length, length - offset)
+            current.append((i, offset, this_chunk_len))
+            if len(current) >= batch_size:
                 batches_indices.append(current)
+                current = []
+        if current:
+            batches_indices.append(current)
 
-            def prepare_batch(group):
-                inputs = []
-                indices = []
-                for i, offset in group:
-                    chunk = TensorChunk(mix_chunk, offset, segment_length)
-                    padded = chunk.padded(std_valid_len)
-                    inputs.append(padded)
-                    indices.append(i)
-                stacked = mx.stack(inputs)
-                b_seg, b_audio, ch, l = stacked.shape
-                flat = stacked.reshape(b_seg * b_audio, ch, l)
-                mx.eval(flat)
-                return flat, indices, b_seg, b_audio
-
-            try:
-                next_batch_data = None
-                next_fut = None
-                if batches_indices:
-                    next_batch_data = prepare_batch(batches_indices[0])
-                    next_fut = ane_worker.submit(next_batch_data[0])
-
-                for b_idx in range(len(batches_indices)):
-                    flat, indices, b_seg, b_audio = next_batch_data
-                    curr_fut = next_fut
-
-                    if b_idx + 1 < len(batches_indices):
-                        next_batch_data = prepare_batch(batches_indices[b_idx + 1])
-                        next_fut = ane_worker.submit(next_batch_data[0])
-                    else:
-                        next_batch_data = None
-                        next_fut = None
-
-                    batch_out_flat = _forward(model, flat, compile=compile, ane_future=curr_fut)
-                    _, sources, out_c, out_t = batch_out_flat.shape
-                    batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
-
-                    for i, idx in enumerate(indices):
-                        chunk_out = center_trim(batch_out[i], segment_length)
-                        offset = offsets[idx]
-                        end = offset + segment_length
-                        if _USE_SAFE_SLICE_ACCUMULATION:
-                            update = weight.reshape(1, 1, 1, -1) * chunk_out
-                            out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
-                            sum_weight[offset:end] = sum_weight[offset:end] + weight
-                        else:
-                            out = out.at[:, :, :, offset:end].add(weight.reshape(1, 1, 1, -1) * chunk_out)
-                            sum_weight = sum_weight.at[offset:end].add(weight)
-                        if progress_bar is not None:
-                            progress_bar.update(1)
-
-                    mx.async_eval(out, sum_weight)
-
-                for i, offset, this_chunk_len in tail_indices:
-                    chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
-                    valid_len = model.valid_length(this_chunk_len) if hasattr(model, "valid_length") else this_chunk_len
-                    padded = chunk.padded(valid_len)
-                    chunk_out = _forward(model, padded, compile=compile)
-                    chunk_out = center_trim(chunk_out, this_chunk_len)
-                    end = offset + this_chunk_len
-                    w = weight[:this_chunk_len].reshape(1, 1, 1, -1)
-                    if _USE_SAFE_SLICE_ACCUMULATION:
-                        out[:, :, :, offset:end] = out[:, :, :, offset:end] + w * chunk_out
-                        sum_weight[offset:end] = sum_weight[offset:end] + weight[:this_chunk_len]
-                    else:
-                        out = out.at[:, :, :, offset:end].add(w * chunk_out)
-                        sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
-                    mx.async_eval(out, sum_weight)
-                    if progress_bar is not None:
-                        progress_bar.update(1)
-            finally:
-                if progress_bar is not None:
-                    progress_bar.close()
-
-            if bool(mx.any(sum_weight == 0).item()):
-                raise ValueError("sum_weight has zeros; check segment and overlap settings")
-
-            out = out / sum_weight
-            mx.eval(out)
-            return out
-
-        def flush_batch():
-            nonlocal batch_inputs, batch_indices, out, sum_weight
-            if not batch_inputs:
-                return
-
-            # 1. Stack: (Batch_Segments, Audio_Batch, Channels, Time)
-            batch_tensor = mx.stack(batch_inputs)
-
-            # 2. Reshape: Flatten Segments into Batch -> (Total_Batch, Channels, Time)
-            b_seg, b_audio, channels, length = batch_tensor.shape
-            batch_tensor_flat = batch_tensor.reshape(b_seg * b_audio, channels, length)
-
-            # 3. Run Model (Standard 3D Input)
-            batch_out_flat = _forward(model, batch_tensor_flat, compile=compile)
-
-            # 4. Unflatten: (Batch_Segments, Audio_Batch, Sources, Channels, Time)
-            _, sources, out_c, out_t = batch_out_flat.shape
-            batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
-
-            if _USE_SAFE_SLICE_ACCUMULATION:
-                for i, idx in enumerate(batch_indices):
-                    chunk_out = center_trim(batch_out[i], segment_length)
-
-                    offset = offsets[idx]
-                    end = offset + segment_length
-                    update = weight.reshape(1, 1, 1, -1) * chunk_out
-                    out[:, :, :, offset:end] = out[:, :, :, offset:end] + update
-                    sum_weight[offset:end] = sum_weight[offset:end] + weight
-
-                    if progress_bar is not None:
-                        progress_bar.update(1)
-            else:
-                for i, idx in enumerate(batch_indices):
-                    chunk_out = center_trim(batch_out[i], segment_length)
-
-                    offset = offsets[idx]
-                    end = offset + segment_length
-
-                    out = out.at[:, :, :, offset:end].add(weight.reshape(1, 1, 1, -1) * chunk_out)
-                    sum_weight = sum_weight.at[offset:end].add(weight)
-
-                    if progress_bar is not None:
-                        progress_bar.update(1)
-
-            mx.async_eval(out, sum_weight)
-            batch_inputs = []
-            batch_indices = []
+        def prepare_batch(group):
+            inputs = []
+            for i, offset, this_chunk_len in group:
+                chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
+                padded = chunk.padded(std_valid_len)
+                inputs.append(padded)
+            actual_count = len(inputs)
+            if compile and len(batches_indices) > 1 and actual_count < batch_size:
+                while len(inputs) < batch_size:
+                    inputs.append(inputs[-1])
+            stacked = mx.stack(inputs)
+            b_seg, b_audio, ch, l = stacked.shape
+            flat = stacked.reshape(b_seg * b_audio, ch, l)
+            mx.eval(flat)
+            return flat, group, actual_count, b_seg, b_audio
 
         try:
-            for i, offset in enumerate(offsets):
-                this_chunk_len = min(segment_length, length - offset)
-                chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
+            next_batch_data = None
+            next_fut = None
+            if batches_indices:
+                next_batch_data = prepare_batch(batches_indices[0])
+                if ane_worker is not None:
+                    next_fut = ane_worker.submit(next_batch_data[0])
 
-                # Batch only standard-sized chunks
-                if this_chunk_len == segment_length:
-                    padded = chunk.padded(std_valid_len)
-                    batch_inputs.append(padded)
-                    batch_indices.append(i)
+            for b_idx in range(len(batches_indices)):
+                flat, group, actual_count, b_seg, b_audio = next_batch_data
+                curr_fut = next_fut
 
-                    if len(batch_inputs) >= batch_size:
-                        flush_batch()
+                if b_idx + 1 < len(batches_indices):
+                    next_batch_data = prepare_batch(batches_indices[b_idx + 1])
+                    if ane_worker is not None:
+                        next_fut = ane_worker.submit(next_batch_data[0])
                 else:
-                    # Flush pending batch
-                    flush_batch()
+                    next_batch_data = None
+                    next_fut = None
 
-                    # Run odd-sized chunk individually
-                    if hasattr(model, "valid_length"):
-                        valid_len = model.valid_length(this_chunk_len)
-                    else:
-                        valid_len = this_chunk_len
-                    padded = chunk.padded(valid_len)
+                conv_mx = None
+                if curr_fut is not None:
+                    wait_start = time.perf_counter()
+                    conv = curr_fut.result()
+                    ane_worker.wait_seconds += time.perf_counter() - wait_start
+                    transfer_start = time.perf_counter()
+                    conv_mx = mx.asarray(conv, copy=False)
+                    mx.eval(conv_mx)
+                    ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
-                    # FIX: Pass 'padded' directly. It is already (Batch, Channels, Time).
-                    chunk_out = _forward(model, padded, compile=compile)
-                    chunk_out = center_trim(chunk_out, this_chunk_len)
+                batch_out_flat = _forward(model, flat, compile=compile, precomputed_conv=conv_mx)
+                _, sources, out_c, out_t = batch_out_flat.shape
+                batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
 
+                for i in range(actual_count):
+                    idx, offset, this_chunk_len = group[i]
+                    chunk_out = center_trim(batch_out[i], this_chunk_len)
                     end = offset + this_chunk_len
                     w = weight[:this_chunk_len].reshape(1, 1, 1, -1)
                     if _USE_SAFE_SLICE_ACCUMULATION:
@@ -465,12 +370,10 @@ def apply_model(
                     else:
                         out = out.at[:, :, :, offset:end].add(w * chunk_out)
                         sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
-                    # Async eval to bound graph size without blocking
-                    mx.async_eval(out, sum_weight)
                     if progress_bar is not None:
                         progress_bar.update(1)
 
-            flush_batch()
+                mx.async_eval(out, sum_weight)
         finally:
             if progress_bar is not None:
                 progress_bar.close()
