@@ -19,11 +19,14 @@ _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
 _COMPILED_FORWARDS: dict[int, tuple[weakref.ReferenceType, dict]] = {}
 
 
-def _forward(model: tp.Any, x: mx.array) -> mx.array:
+def _forward(model: tp.Any, x: mx.array, compile: tp.Optional[bool] = None) -> mx.array:
     """Optionally compile repeated GPU forward shapes after an eager first call."""
-    enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
+    if compile is None:
+        enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+    else:
+        enabled = bool(compile)
     if not enabled or getattr(model, "_ane_time_conv", None) is not None:
         return model(x)
 
@@ -129,6 +132,7 @@ def apply_model(
     _rng: tp.Optional[random.Random] = None,
     *,
     source_index: tp.Optional[int] = None,
+    compile: tp.Optional[bool] = None,
 ):
     progress_enabled = bool(progress)
     if num_workers > 0:
@@ -163,7 +167,7 @@ def apply_model(
             result = apply_model(
                 model.models[model_index], mix, shifts, split, overlap,
                 transition_power, progress, num_workers, segment, batch_size,
-                seed=seed, _rng=rng,
+                seed=seed, _rng=rng, compile=compile,
             )
             for later in model.models[model_index + 1 :]:
                 for _ in range(shifts):
@@ -178,7 +182,8 @@ def apply_model(
         for sub_model, model_weights in zip(model.models, model.weights):
             res = apply_model(
                 sub_model, mix, shifts, split, overlap, transition_power,
-                progress, num_workers, segment, batch_size, seed=seed, _rng=rng
+                progress, num_workers, segment, batch_size, seed=seed, _rng=rng,
+                compile=compile,
             )
             out = mx.array(res)
 
@@ -225,7 +230,8 @@ def apply_model(
             shifted = TensorChunk(padded_chunk, offset, length + max_shift - offset)
             shifted_out = apply_model(
                 model, shifted, 0, split, overlap, transition_power,
-                False, num_workers, segment, batch_size, seed=seed, _rng=rng
+                False, num_workers, segment, batch_size, seed=seed, _rng=rng,
+                compile=compile,
             )
             out = out + shifted_out[..., max_shift - offset:]
         out = out / shifts
@@ -279,7 +285,7 @@ def apply_model(
             batch_tensor_flat = batch_tensor.reshape(b_seg * b_audio, channels, length)
 
             # 3. Run Model (Standard 3D Input)
-            batch_out_flat = _forward(model, batch_tensor_flat)
+            batch_out_flat = _forward(model, batch_tensor_flat, compile=compile)
 
             # 4. Unflatten: (Batch_Segments, Audio_Batch, Sources, Channels, Time)
             _, sources, out_c, out_t = batch_out_flat.shape
@@ -339,7 +345,7 @@ def apply_model(
                     padded = chunk.padded(valid_len)
 
                     # FIX: Pass 'padded' directly. It is already (Batch, Channels, Time).
-                    chunk_out = _forward(model, padded)
+                    chunk_out = _forward(model, padded, compile=compile)
                     chunk_out = center_trim(chunk_out, this_chunk_len)
 
                     end = offset + this_chunk_len
@@ -370,5 +376,5 @@ def apply_model(
     # No split path
     valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length
     padded_mix = mix_chunk.padded(valid_length)
-    out = _forward(model, padded_mix)
+    out = _forward(model, padded_mix, compile=compile)
     return center_trim(out, length)
