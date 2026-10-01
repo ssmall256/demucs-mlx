@@ -432,8 +432,9 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     f"ANE waveform path requires 1 or 2 segments of {LENGTH} samples; "
                     f"got {tuple(mix.shape)}"
                 )
+            mx.eval(mix)
             transfer_start = time.perf_counter()
-            ane_future = ane_conv.submit(np.asarray(mix))
+            ane_future = ane_conv.submit(mix)
             ane_conv.transfer_seconds += time.perf_counter() - transfer_start
         z = self._spec(mix)
         mag = self._magnitude(z)
@@ -464,7 +465,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     tail_outputs = ane_tail_future.result()
                     ane_tail.wait_seconds += time.perf_counter() - wait_start
                     transfer_start = time.perf_counter()
-                    tail_mx = tuple(mx.array(value) for value in tail_outputs)
+                    tail_mx = tuple(mx.asarray(value, copy=False) for value in tail_outputs)
                     mx.eval(*tail_mx)
                     ane_tail.transfer_seconds += time.perf_counter() - transfer_start
                     lengths_t.extend((85_995, 21_499, 5_375))
@@ -475,7 +476,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     conv = ane_future.result()
                     ane_conv.wait_seconds += time.perf_counter() - wait_start
                     transfer_start = time.perf_counter()
-                    conv_mx = mx.array(conv)
+                    conv_mx = mx.asarray(conv, copy=False)
                     mx.eval(conv_mx)
                     ane_conv.transfer_seconds += time.perf_counter() - transfer_start
                     xt = conv_mx
@@ -510,14 +511,14 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 conv = ane_future.result()
                 ane_conv.wait_seconds += time.perf_counter() - wait_start
                 transfer_start = time.perf_counter()
-                conv_mx = mx.array(conv)
+                conv_mx = mx.asarray(conv, copy=False)
                 mx.eval(conv_mx)
                 ane_conv.transfer_seconds += time.perf_counter() - transfer_start
                 lengths_t.append(LENGTH)
                 xt = self.tencoder[0](xt, precomputed_conv=conv_mx)
                 saved_t.append(xt)
                 transfer_start = time.perf_counter()
-                ane_tail_future = ane_tail.submit(np.asarray(xt))
+                ane_tail_future = ane_tail.submit(xt)
                 ane_tail.transfer_seconds += time.perf_counter() - transfer_start
 
         if self.crosstransformer:
