@@ -72,6 +72,5 @@ def resample_mx(
     else:
         raise ValueError(f"Expected 2D or 3D array, got shape {original_shape}")
 
-    # x is (channels, frames); mac.resample expects (frames, channels)
-    resampled = mac.resample(mx.transpose(x, (1, 0)), orig_freq, new_freq, quality=quality)
-    return mx.transpose(resampled, (1, 0))
+    # x is (channels, frames)
+    return mac.resample(x, orig_freq, new_freq, quality=quality, layout="channels_first")
