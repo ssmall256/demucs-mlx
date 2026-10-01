@@ -85,14 +85,16 @@ class Separator:
         self._model = get_mlx_model(model)
         if hasattr(self._model, "eval"):
             self._model.eval()
-            for sub in getattr(self._model, "models", [self._model]):
-                ct = getattr(sub, "crosstransformer", None)
-                if ct is not None:
-                    for layer in getattr(ct, "layers", []) + getattr(ct, "layers_t", []):
-                        for a in ("attn", "cross_attn"):
-                            m = getattr(layer, a, None)
-                            if m is not None and hasattr(m, "_ensure_fused"):
-                                m._ensure_fused()
+        for sub in getattr(self._model, "models", [self._model]):
+            if hasattr(sub, "eval"):
+                sub.eval()
+            ct = getattr(sub, "crosstransformer", None)
+            if ct is not None:
+                for layer in getattr(ct, "layers", []) + getattr(ct, "layers_t", []):
+                    for a in ("attn", "cross_attn"):
+                        m = getattr(layer, a, None)
+                        if m is not None and hasattr(m, "_ensure_fused"):
+                            m._ensure_fused()
         if stem is not None and stem not in self._model.sources:
             raise ValueError(f"Unknown stem {stem!r}; available: {', '.join(self._model.sources)}")
         self.stem = stem
