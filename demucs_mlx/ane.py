@@ -112,25 +112,37 @@ def _torch_conv(torch_model, tile_outputs: int = DEFAULT_TILE_OUTPUTS):
     return TiledFirstConv(torch_model.tencoder[0].conv).eval()
 
 
-def _torch_tail(torch_model):
+def _torch_tail_convs(torch_model):
     import torch
     import torch.nn.functional as functional
 
-    class Tail(torch.nn.Module):
-        def __init__(self, layers):
+    class TiledConv1(torch.nn.Module):
+        def __init__(self, conv):
             super().__init__()
-            self.layers = torch.nn.ModuleList(layers)
+            self.conv = conv
 
         def forward(self, x):
-            outputs = []
-            for layer in self.layers:
-                # Each full-length input is one sample short of a multiple
-                # of four. HEncLayer's dynamic pad is equivalent to this.
-                x = layer(functional.pad(x, (0, 1)))
-                outputs.append(x)
-            return tuple(outputs)
+            padded = functional.pad(x, (2, 3))
+            tiles = []
+            for i in range(4):
+                inp = padded[:, :, i * 17200 : i * 17200 + 17204]
+                tiles.append(functional.conv1d(inp, self.conv.weight, self.conv.bias, stride=4))
+            inp4 = padded[:, :, 4 * 17200 : 4 * 17200 + 17200]
+            tiles.append(functional.conv1d(inp4, self.conv.weight, self.conv.bias, stride=4))
+            return torch.cat(tiles, dim=-1)
 
-    return Tail(torch_model.tencoder[1:]).eval()
+    class ConvStage(torch.nn.Module):
+        def __init__(self, conv):
+            super().__init__()
+            self.conv = conv
+
+        def forward(self, x):
+            return self.conv(functional.pad(x, (0, 1)))
+
+    m1 = TiledConv1(torch_model.tencoder[1].conv).eval()
+    m2 = ConvStage(torch_model.tencoder[2].conv).eval()
+    m3 = ConvStage(torch_model.tencoder[3].conv).eval()
+    return m1, m2, m3
 
 
 def _device_placement(path: Path) -> dict:
@@ -236,7 +248,7 @@ def convert(tile_outputs: int = DEFAULT_TILE_OUTPUTS) -> dict:
 
 
 def convert_tail() -> dict:
-    """Convert the remaining full-length waveform stages and verify placement."""
+    """Convert the remaining waveform downsamplers and verify ANE placement."""
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise RuntimeError("The Neural Engine prototype requires Apple Silicon macOS")
     try:
@@ -265,36 +277,54 @@ def convert_tail() -> dict:
     ):
         raise RuntimeError("Unexpected HTDemucs waveform encoder shape")
 
-    example = torch.zeros((BATCH, 48, 85_995), dtype=torch.float32)
-    with torch.no_grad():
-        traced = torch.jit.trace(_torch_tail(torch_model), example, check_trace=False)
-    ml = ct.convert(
-        traced,
-        inputs=[ct.TensorType(name="conv0", shape=tuple(example.shape), dtype=np.float32)],
-        outputs=[ct.TensorType(name=f"y{index}", dtype=np.float16) for index in (1, 2, 3)],
-        convert_to="mlprogram",
-        compute_precision=ct.precision.FLOAT16,
-        minimum_deployment_target=ct.target.macOS15,
-        compute_units=ct.ComputeUnit.CPU_AND_NE,
-    )
+    m1, m2, m3 = _torch_tail_convs(torch_model)
+    stages = [
+        ("c1", m1, (BATCH, 48, 85_995)),
+        ("c2", m2, (BATCH, 96, 21_499)),
+        ("c3", m3, (BATCH, 192, 5_375)),
+    ]
+
     target = tail_compiled_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    package = target.with_suffix(".mlpackage")
-    ml.save(str(package))
-    built = Path(ct.models.utils.compile_model(str(package)))
-    placement = _device_placement(built)
-    tail_manifest_path().unlink(missing_ok=True)
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(built, target)
-    ane_preferred = any("NeuralEngine" in device for device in placement["operations"])
+    target.mkdir(parents=True, exist_ok=True)
+
+    placements = {}
+    ane_preferred = True
+
+    for name, module, shape in stages:
+        example = torch.zeros(shape, dtype=torch.float32)
+        with torch.no_grad():
+            traced = torch.jit.trace(module, example, check_trace=False)
+        ml = ct.convert(
+            traced,
+            inputs=[ct.TensorType(name="x", shape=shape, dtype=np.float32)],
+            outputs=[ct.TensorType(name="y", dtype=np.float16)],
+            convert_to="mlprogram",
+            compute_precision=ct.precision.FLOAT16,
+            minimum_deployment_target=ct.target.macOS15,
+            compute_units=ct.ComputeUnit.CPU_AND_NE,
+        )
+        package = target.parent / f"{target.stem}_{name}.mlpackage"
+        ml.save(str(package))
+        built = Path(ct.models.utils.compile_model(str(package)))
+        placement = _device_placement(built)
+        placements[name] = placement
+        stage_target = target / f"{name}.mlmodelc"
+        if stage_target.exists():
+            shutil.rmtree(stage_target)
+        shutil.copytree(built, stage_target)
+        if not any("NeuralEngine" in d for d in placement["operations"]):
+            ane_preferred = False
+
     manifest = {
         "model": MODEL_NAME,
         "batch": BATCH,
-        "input_shape": list(example.shape),
-        "partition": "tencoder_1_3_full",
+        "input_shape": [BATCH, 48, 85_995],
+        "partition": "hybrid_tencoder_1_3",
         "safetensors_sha256": digest,
-        "placement": placement,
+        "placement": placements,
         "ane_preferred": ane_preferred,
     }
     temporary_manifest = tail_manifest_path().with_suffix(".json.tmp")
@@ -302,8 +332,7 @@ def convert_tail() -> dict:
     temporary_manifest.replace(tail_manifest_path())
     if not ane_preferred:
         raise RuntimeError(
-            "Core ML converted the waveform tail, but its compute plan chose CPU. "
-            f"Diagnostic assets are at {target}; placement: {placement}"
+            f"Core ML converted the waveform tail, but placement lacked NeuralEngine: {placements}"
         )
     return manifest
 
@@ -501,8 +530,8 @@ class WaveformConv:
         return outputs[0] if len(outputs) == 1 else tuple(outputs)
 
 
-class WaveformTail(WaveformConv):
-    """The three full-length stages after the first waveform encoder stage."""
+class WaveformTail:
+    """High-ROI mixed-precision waveform tail with ANE downsampling and MLX layers."""
 
     def __init__(self):
         if sys.platform != "darwin" or platform.machine() != "arm64":
@@ -518,13 +547,72 @@ class WaveformTail(WaveformConv):
             manifest.get("model") != MODEL_NAME
             or manifest.get("batch") != BATCH
             or manifest.get("input_shape") != [BATCH, 48, 85_995]
-            or manifest.get("partition") != "tencoder_1_3_full"
+            or manifest.get("partition") != "hybrid_tencoder_1_3"
             or manifest.get("safetensors_sha256") != _cache_identity()
         ):
             raise RuntimeError("Core ML waveform tail does not match validated MLX weights")
         if not manifest.get("ane_preferred"):
             raise RuntimeError("Core ML waveform tail asset has no Neural Engine placement")
-        self._init_coreml(manifest["placement"], "conv0", ("y1", "y2", "y3"))
+
+        try:
+            import CoreML
+            import Foundation
+        except ImportError as exc:
+            raise RuntimeError("Install demucs-mlx[ane] for the Core ML runtime") from exc
+
+        self.placement = manifest["placement"]
+        self._coreml = CoreML
+
+        import mlx.core as mx
+        import mlx.utils
+
+        from .model_converter import get_mlx_model
+        self._mlx_model = get_mlx_model(MODEL_NAME).models[0]
+        for _, p in mlx.utils.tree_flatten(self._mlx_model.parameters()):
+            mx.eval(p)
+
+        config = CoreML.MLModelConfiguration.alloc().init()
+        config.setComputeUnits_(CoreML.MLComputeUnitsCPUAndNeuralEngine)
+
+        self._models = {}
+        self._out_buffers = {}
+        self._out_backings = {}
+        self._in_pad_bufs = {}
+
+        shapes = {
+            "c1": ((BATCH, 48, 85_995), (BATCH, 96, 21_499)),
+            "c2": ((BATCH, 96, 21_499), (BATCH, 192, 5_375)),
+            "c3": ((BATCH, 192, 5_375), (BATCH, 384, 1_344)),
+        }
+
+        for name, (in_sh, out_sh) in shapes.items():
+            model_url = Foundation.NSURL.fileURLWithPath_(str(self.path / f"{name}.mlmodelc"))
+            m, err = CoreML.MLModel.modelWithContentsOfURL_configuration_error_(model_url, config, None)
+            if m is None:
+                raise RuntimeError(f"Could not load Core ML model {name}: {err}")
+            self._models[name] = m
+            self._in_pad_bufs[name] = np.empty(in_sh, dtype=np.float32)
+
+            out_buf = np.empty(out_sh, dtype=np.float16)
+            self._out_buffers[name] = out_buf
+            strides = [s // out_buf.itemsize for s in out_buf.strides]
+            ma, err = (
+                CoreML.MLMultiArray.alloc()
+                .initWithDataPointer_shape_dataType_strides_deallocator_error_(
+                    out_buf, list(out_sh), CoreML.MLMultiArrayDataTypeFloat16, strides, None, None
+                )
+            )
+            if ma is None:
+                raise RuntimeError(f"Could not create output backing for {name}: {err}")
+            self._out_backings[name] = ma
+
+        self.busy_seconds = 0.0
+        self.wait_seconds = 0.0
+        self.transfer_seconds = 0.0
+        self.predictions = 0
+        self._jobs: queue.Queue = queue.Queue()
+        self._worker = threading.Thread(target=self._run, daemon=True, name="demucs-ane-tail")
+        self._worker.start()
 
     def submit(self, encoded: np.ndarray | tp.Any) -> Future:
         if not isinstance(encoded, np.ndarray):
@@ -533,7 +621,93 @@ class WaveformTail(WaveformConv):
             raise ValueError(
                 f"ANE waveform tail expects (1 or 2, 48, 85995), got {encoded.shape}"
             )
-        return self._submit(encoded)
+        data = np.ascontiguousarray(encoded, dtype=np.float32)
+        future: Future = Future()
+        self._jobs.put((data, future))
+        return future
+
+    def close(self) -> None:
+        if self._worker.is_alive():
+            self._jobs.put(None)
+            self._worker.join()
+
+    def _run(self) -> None:
+        import mlx.core as mx
+
+        with mx.stream(mx.default_stream(mx.default_device())):
+            while True:
+                job = self._jobs.get()
+                if job is None:
+                    return
+                data, future = job
+                try:
+                    start = time.perf_counter()
+                    result = self._predict(data)
+                    self.busy_seconds += time.perf_counter() - start
+                    self.predictions += 1
+                    future.set_result(result)
+                except BaseException as exc:
+                    future.set_exception(exc)
+
+    def _predict_stage(self, name: str, data: np.ndarray) -> np.ndarray:
+        coreml = self._coreml
+        count = len(data)
+        if count == 1:
+            buf = self._in_pad_bufs[name]
+            buf[0] = data[0]
+            buf[1] = data[0]
+            data = buf
+        elif not data.flags.c_contiguous:
+            data = np.ascontiguousarray(data)
+
+        init_array = (
+            coreml.MLMultiArray.alloc()
+            .initWithDataPointer_shape_dataType_strides_deallocator_error_
+        )
+        array, error = init_array(
+            data, list(data.shape), coreml.MLMultiArrayDataTypeFloat32,
+            [stride // data.itemsize for stride in data.strides], None, None,
+        )
+        if array is None:
+            raise RuntimeError(f"Could not create Core ML input array for {name}: {error}")
+        features, error = coreml.MLDictionaryFeatureProvider.alloc().initWithDictionary_error_(
+            {"x": coreml.MLFeatureValue.featureValueWithMultiArray_(array)}, None
+        )
+        if features is None:
+            raise RuntimeError(f"Could not create Core ML input features for {name}: {error}")
+
+        options = coreml.MLPredictionOptions.alloc().init()
+        options.setOutputBackings_({"y": self._out_backings[name]})
+        result, error = self._models[name].predictionFromFeatures_options_error_(features, options, None)
+        if result is None:
+            raise RuntimeError(f"Core ML prediction failed for {name}: {error}")
+        return self._out_buffers[name][:count]
+
+    def _predict(self, data: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        import mlx.core as mx
+
+        # Stage 1: ANE conv1 + MLX layer
+        c1 = self._predict_stage("c1", data)
+        c1_mx = mx.asarray(c1, copy=False)
+        y1 = self._mlx_model.tencoder[1](None, precomputed_conv=c1_mx)
+        mx.eval(y1)
+        y1_np = np.asarray(y1)
+
+        # Stage 2: ANE conv2 + MLX layer
+        c2 = self._predict_stage("c2", y1_np)
+        c2_mx = mx.asarray(c2, copy=False)
+        y2 = self._mlx_model.tencoder[2](None, precomputed_conv=c2_mx)
+        mx.eval(y2)
+        y2_np = np.asarray(y2)
+
+        # Stage 3: ANE conv3 + MLX layer
+        c3 = self._predict_stage("c3", y2_np)
+        c3_mx = mx.asarray(c3, copy=False)
+        y3 = self._mlx_model.tencoder[3](None, precomputed_conv=c3_mx)
+        mx.eval(y3)
+        y3_np = np.asarray(y3)
+
+        return y1_np, y2_np, y3_np
 
 
 def main(argv=None) -> int:

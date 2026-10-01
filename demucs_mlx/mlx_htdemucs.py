@@ -411,7 +411,12 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             )
         return training_length
 
-    def __call__(self, mix: mx.array) -> mx.array:
+    def __call__(
+        self,
+        mix: mx.array,
+        *,
+        ane_future: tp.Optional[Future] = None,
+    ) -> mx.array:
         length = mix.shape[-1]
         length_pre_pad = None
         if self.use_train_segment:
@@ -422,20 +427,20 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         ane_conv = getattr(self, "_ane_time_conv", None)
         # Private diagnostic hook: the current FP16 tail fails stem fidelity.
         ane_tail = getattr(self, "_ane_time_tail", None)
-        ane_future = None
         ane_tail_future = None
         if ane_conv is not None:
             from .ane import LENGTH
 
-            if mix.shape[-1] != LENGTH or mix.shape[0] not in (1, 2):
-                raise ValueError(
-                    f"ANE waveform path requires 1 or 2 segments of {LENGTH} samples; "
-                    f"got {tuple(mix.shape)}"
-                )
-            mx.eval(mix)
-            transfer_start = time.perf_counter()
-            ane_future = ane_conv.submit(mix)
-            ane_conv.transfer_seconds += time.perf_counter() - transfer_start
+            if ane_future is None:
+                if mix.shape[-1] != LENGTH or mix.shape[0] not in (1, 2):
+                    raise ValueError(
+                        f"ANE waveform path requires 1 or 2 segments of {LENGTH} samples; "
+                        f"got {tuple(mix.shape)}"
+                    )
+                mx.eval(mix)
+                transfer_start = time.perf_counter()
+                ane_future = ane_conv.submit(mix)
+                ane_conv.transfer_seconds += time.perf_counter() - transfer_start
         z = self._spec(mix)
         mag = self._magnitude(z)
         x = mag
@@ -536,18 +541,30 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 xt = self.channel_downsampler_t(xt)
 
         offset = self.depth - len(self.tdecoder)
-        for idx, decode in enumerate(self.decoder):
-            skip = saved.pop(-1)
-            x, pre = decode(x, skip, lengths.pop(-1))
-            if idx >= offset:
-                tdec = self.tdecoder[idx - offset]
+        has_empty_tdec = any(t.empty for t in self.tdecoder)
+        if not has_empty_tdec:
+            # Dual-branch decoders: waveform and spectral decoders are independent skip consumers.
+            for tdec in self.tdecoder:
                 length_t = lengths_t.pop(-1)
-                if tdec.empty:
-                    pre = pre[:, :, 0]
-                    xt, _ = tdec(pre, None, length_t)
-                else:
-                    skip_t = saved_t.pop(-1)
-                    xt, _ = tdec(xt, skip_t, length_t)
+                skip_t = saved_t.pop(-1)
+                xt, _ = tdec(xt, skip_t, length_t)
+
+            for idx, decode in enumerate(self.decoder):
+                skip = saved.pop(-1)
+                x, _ = decode(x, skip, lengths.pop(-1))
+        else:
+            for idx, decode in enumerate(self.decoder):
+                skip = saved.pop(-1)
+                x, pre = decode(x, skip, lengths.pop(-1))
+                if idx >= offset:
+                    tdec = self.tdecoder[idx - offset]
+                    length_t = lengths_t.pop(-1)
+                    if tdec.empty:
+                        pre = pre[:, :, 0]
+                        xt, _ = tdec(pre, None, length_t)
+                    else:
+                        skip_t = saved_t.pop(-1)
+                        xt, _ = tdec(xt, skip_t, length_t)
 
         if len(saved) != 0 or len(lengths_t) != 0 or len(saved_t) != 0:
             raise RuntimeError("Skip connections not fully consumed")

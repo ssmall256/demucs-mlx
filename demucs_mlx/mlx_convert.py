@@ -1178,6 +1178,7 @@ def load_mlx_model_from_safetensors(
     ):
         raise SafeCacheError("Demucs safetensors must contain named MLX arrays")
     weights_dict = tp.cast(dict[str, mx.array], loaded)
+    mx.eval(*weights_dict.values())
 
     classes = _mlx_model_classes()
     models = []
