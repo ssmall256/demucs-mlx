@@ -5,12 +5,12 @@ import mlx.core as mx
 import numpy as np
 
 
-def load_audio(path, *, sr: int, dtype: str = "float32"):
+def load_audio(path, *, sr: int, layout: str = "channels_first", dtype: str = "float32"):
     """Load through mlx-audio-io with a useful error for a broken native binding."""
     import mlx_audio_io as mac
 
     try:
-        return mac.load(str(path), sr=sr, dtype=dtype)
+        return mac.load(str(path), sr=sr, layout=layout, dtype=dtype)
     except TypeError as exc:
         if "Unable to convert function return value to a Python type" not in str(exc):
             raise
@@ -106,33 +106,19 @@ def save_audio(wav,
     # --- MLX HANDLING (Optimized) ---
     if isinstance(wav, mx.array):
         wav_mx = _prevent_clip_mlx(wav, mode=clip)
-        # mlx_audio_io.save expects (frames, channels) or 1D array
-        # wav_mx is (channels, frames), so transpose
-        if wav_mx.ndim == 1:
-            audio_to_save = wav_mx
-        else:
-            audio_to_save = mx.transpose(wav_mx, (1, 0))
-        mac.save(str(path), audio_to_save, samplerate, encoding=encoding, clip=(clip != 'none'))
+        mac.save(str(path), wav_mx, samplerate, encoding=encoding, clip=(clip != 'none'))
     # --- NUMPY HANDLING ---
     elif isinstance(wav, np.ndarray):
         wav_np = wav
         if np.issubdtype(wav_np.dtype, np.floating):
             wav_np = _prevent_clip_numpy(wav_np, mode=clip)
-        if wav_np.ndim == 1:
-            audio_to_save = wav_np
-        else:
-            audio_to_save = np.ascontiguousarray(wav_np.T)
-        mac.save(str(path), audio_to_save, samplerate, encoding=encoding, clip=False)
+        mac.save(str(path), wav_np, samplerate, encoding=encoding, clip=False)
     # --- TORCH HANDLING (lazy import) ---
     else:
         import torch
         if isinstance(wav, torch.Tensor):
             wav = prevent_clip(wav, mode=clip)
             wav_np = wav.detach().cpu().numpy()
-            if wav_np.ndim == 1:
-                audio_to_save = wav_np
-            else:
-                audio_to_save = np.ascontiguousarray(wav_np.T)
-            mac.save(str(path), audio_to_save, samplerate, encoding=encoding, clip=False)
+            mac.save(str(path), wav_np, samplerate, encoding=encoding, clip=False)
         else:
             raise TypeError(f"Unsupported audio type: {type(wav)}")

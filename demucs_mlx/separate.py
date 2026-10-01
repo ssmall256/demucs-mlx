@@ -93,7 +93,7 @@ def _load_audio(path: Path, model):
     from .audio import load_audio
 
     audio_mx, sr = load_audio(path, sr=model.samplerate, dtype="float32")
-    wav = audio_mx.T
+    wav = audio_mx
     src_channels = wav.shape[0]
     tgt_channels = model.audio_channels
     if src_channels != tgt_channels:

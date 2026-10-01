@@ -359,7 +359,8 @@ def apply_model(
                     else:
                         out = out.at[:, :, :, offset:end].add(w * chunk_out)
                         sum_weight = sum_weight.at[offset:end].add(weight[:this_chunk_len])
-                    mx.async_eval(out, sum_weight)  # Async eval to bound graph size without blocking
+                    # Async eval to bound graph size without blocking
+                    mx.async_eval(out, sum_weight)
                     if progress_bar is not None:
                         progress_bar.update(1)
 
