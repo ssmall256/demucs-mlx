@@ -586,6 +586,13 @@ class BagOfModelsMLX:
         for i, model in enumerate(self.models):
             model.load_state_dict(state[f"model_{i}"])
 
+    def eval(self) -> "BagOfModelsMLX":
+        """Set all sub-models to eval mode."""
+        for model in self.models:
+            if hasattr(model, "eval"):
+                model.eval()
+        return self
+
 
 def convert_conv_weight(weight: np.ndarray, conv_type: str, transpose: bool = True) -> np.ndarray:
     """Convert convolution weight from PyTorch to MLX layout."""
