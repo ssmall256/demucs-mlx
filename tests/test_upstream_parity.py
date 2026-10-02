@@ -131,17 +131,21 @@ def test_htdemucs_parity():
     # Layer scale off, or the 1e-4 init hides any transformer error.
     model = HTDemucs(SOURCES, channels=8, depth=4, segment=1, bottom_channels=16,
                      t_layers=4, t_heads=2, dconv_mode=3, t_layer_scale=False, dconv_init=1.0)
-    _assert_parity(_forward_parity(model, 1.0), 75.0)
+    _assert_parity(_forward_parity(model, 1.0, attention="fp32"), 85.0)
 
 
 def test_htdemucs_fp16_attention_parity():
-    """The opt-in FP16 attention trades some parity for speed."""
+    """The default FP16 attention kernel, with FP32 projections.
+
+    This stress model (layer scale off) measures 78-80 dB; FP32 measures 89-92.
+    The old all-FP16 path, which also rounded the projections, needed 55.
+    """
     _upstream()
     from demucs.htdemucs import HTDemucs
 
     model = HTDemucs(SOURCES, channels=8, depth=4, segment=1, bottom_channels=16,
                      t_layers=4, t_heads=2, dconv_mode=3, t_layer_scale=False, dconv_init=1.0)
-    _assert_parity(_forward_parity(model, 1.0, attention="fp16"), 55.0)
+    _assert_parity(_forward_parity(model, 1.0, attention="fp16"), 75.0)
 
 
 def test_hdemucs_local_attention_and_lstm_parity():
