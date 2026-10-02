@@ -24,7 +24,10 @@ def main():
     with Separator(seed=481, ane_time_encoder=True) as ane:
         worker = ane._ane_worker
         print("## Default-inference alternating benchmark", flush=True)
-        print("**Settings:** shifts=1, overlap=0.25, split=True, batch_size=2, seed=481", flush=True)
+        print(
+            "**Settings:** shifts=1, overlap=0.25, split=True, batch_size=2, seed=481",
+            flush=True,
+        )
         print(
             "| Input | Run | Path | Wall time | Audio / wall | ANE execution | Wait | Transfer |",
             flush=True,

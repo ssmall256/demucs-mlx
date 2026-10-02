@@ -1,8 +1,11 @@
 """Diagnose whether multi-stream operations in MLX actually execute concurrently on Metal."""
 import time
-import numpy as np
+
 import mlx.core as mx
+import numpy as np
+
 from demucs_mlx.api import Separator
+
 
 def main():
     sep = Separator(seed=481, batch_size=8)
@@ -101,7 +104,10 @@ def main():
     print(f"Spectral alone (default stream): {t_spec:6.2f} ms")
     print(f"Waveform alone (s_side stream):  {t_wave:6.2f} ms")
     print(f"Sequential (wave then spec):     {t_seq:6.2f} ms (expected: {t_spec + t_wave:.2f} ms)")
-    print(f"Concurrent (dual stream):        {t_conc:6.2f} ms (ideal: {max(t_spec, t_wave):.2f} ms)")
+    print(
+        f"Concurrent (dual stream):        {t_conc:6.2f} ms (ideal: {max(t_spec, t_wave):.2f} "
+        "ms)"
+    )
     overlap_pct = (t_seq - t_conc) / min(t_spec, t_wave) * 100
     print(f"Effective Overlap:               {overlap_pct:5.1f}%")
     print("=" * 60)

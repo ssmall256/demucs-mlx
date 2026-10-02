@@ -288,8 +288,9 @@ def test_transformer_norm_fix():
 
 def test_fused_overlap_add():
     """Test fused overlap-add kernel against reference accumulation."""
-    from demucs_mlx.metal_kernels import fused_overlap_add, _overlap_add_fallback
     import numpy as np
+
+    from demucs_mlx.metal_kernels import _overlap_add_fallback, fused_overlap_add
 
     print("=== Fused Overlap-Add Kernel ===")
     test_cases = [

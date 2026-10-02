@@ -13,13 +13,11 @@ Measures:
    - Fully orchestrated engine
 """
 import gc
-import os
-import sys
 import time
-import Foundation
-import numpy as np
 
+import Foundation
 import mlx.core as mx
+import numpy as np
 
 THERMAL_NAMES = ["nominal", "fair", "serious", "critical"]
 
@@ -46,7 +44,7 @@ def signal(seconds: int) -> np.ndarray:
     return (0.05 * tones[None, :] + noise).astype(np.float32)
 
 def bench_overlap_add():
-    from demucs_mlx.metal_kernels import fused_overlap_add, _overlap_add_fallback
+    from demucs_mlx.metal_kernels import fused_overlap_add
 
     print("\n" + "=" * 78)
     print("1. OVERLAP-ADD RECONSTRUCTION BENCHMARK (120s Audio, 4 Stems, Stereo)")
@@ -87,7 +85,8 @@ def bench_overlap_add():
         for k in range(num_chunks):
             off = offsets[k]
             chunk_len = min(segment_samples, total_samples - off)
-            out = out.at[:, :, :, off : off + chunk_len].add(w[:, :, :, :chunk_len] * chunks_mx[k, :, :, :, :chunk_len])
+            chunk = w[:, :, :, :chunk_len] * chunks_mx[k, :, :, :, :chunk_len]
+            out = out.at[:, :, :, off : off + chunk_len].add(chunk)
             sum_weight = sum_weight.at[off : off + chunk_len].add(weight_mx[:chunk_len])
         out = out / mx.maximum(sum_weight.reshape(1, 1, 1, -1), 1e-11)
         mx.eval(out)
@@ -101,8 +100,10 @@ def bench_overlap_add():
         for k in range(num_chunks):
             off = offsets[k]
             chunk_len = min(segment_samples, total_samples - off)
-            out[:, :, :, off : off + chunk_len] = out[:, :, :, off : off + chunk_len] + w[:, :, :, :chunk_len] * chunks_mx[k, :, :, :, :chunk_len]
-            sum_weight[off : off + chunk_len] = sum_weight[off : off + chunk_len] + weight_mx[:chunk_len]
+            span = slice(off, off + chunk_len)
+            chunk = w[:, :, :, :chunk_len] * chunks_mx[k, :, :, :, :chunk_len]
+            out[:, :, :, span] = out[:, :, :, span] + chunk
+            sum_weight[span] = sum_weight[span] + weight_mx[:chunk_len]
         out = out / mx.maximum(sum_weight.reshape(1, 1, 1, -1), 1e-11)
         mx.eval(out)
         return out
@@ -142,9 +143,18 @@ def bench_overlap_add():
 
     print(f"Total samples: {total_samples:,} ({seconds}s) across {num_chunks} overlapping chunks")
     print(f"- Baseline A (.at.add loop):     {med_at:6.2f} ms")
-    print(f"- Baseline B (Slice assign loop): {med_slice:6.2f} ms ({med_at/med_slice:.2f}x vs .at.add)")
-    print(f"- Orchestrated (Fused Metal):    {med_fused:6.2f} ms ({med_at/med_fused:.2f}x vs .at.add, {med_slice/med_fused:.2f}x vs slice)")
-    print(f"- Numerical Parity vs Baseline:  Slice diff = {max_err_slice:.2e}, Fused diff = {max_err_fused:.2e}")
+    print(
+        f"- Baseline B (Slice assign loop): {med_slice:6.2f} ms ({med_at/med_slice:.2f}x vs "
+        ".at.add)"
+    )
+    print(
+        f"- Orchestrated (Fused Metal):    {med_fused:6.2f} ms ({med_at/med_fused:.2f}x vs "
+        f".at.add, {med_slice/med_fused:.2f}x vs slice)"
+    )
+    print(
+        f"- Numerical Parity vs Baseline:  Slice diff = {max_err_slice:.2e}, Fused diff = "
+        f"{max_err_fused:.2e}"
+    )
 
 def bench_ane_dispatch():
     print("\n" + "=" * 78)
@@ -164,7 +174,6 @@ def bench_ane_dispatch():
     rng = np.random.default_rng(123)
     data = rng.standard_normal((8, 2, 343980)).astype(np.float32)
     out_target_native = np.empty((8, 48, 85995), dtype=np.float16)
-    out_target_pyobjc = np.empty((8, 48, 85995), dtype=np.float16)
 
     # Warmup both
     predict_waveform_conv_native(wc.path, data, out_target_native)
@@ -195,10 +204,14 @@ def bench_ane_dispatch():
 
     med_pyobjc = np.median(times_pyobjc)
     med_native = np.median(times_native)
-    diff = float(np.max(np.abs(out_target_native.astype(np.float32) - out_pyobjc.astype(np.float32))))
+    native = out_target_native.astype(np.float32)
+    diff = float(np.max(np.abs(native - out_pyobjc.astype(np.float32))))
 
     print(f"- Baseline (PyObjC Core ML, GIL held):      {med_pyobjc:6.2f} ms")
-    print(f"- Orchestrated (Native GCD C/ObjC, No GIL): {med_native:6.2f} ms ({med_pyobjc/med_native:.2f}x speedup)")
+    print(
+        f"- Orchestrated (Native GCD C/ObjC, No GIL): {med_native:6.2f} ms "
+        f"({med_pyobjc/med_native:.2f}x speedup)"
+    )
     print(f"- Parity Difference:                       {diff:.6g} (Bit-exact: {diff == 0.0})")
 
 
@@ -234,7 +247,10 @@ def bench_end_to_end():
             elapsed = time.perf_counter() - t0
             t_out_s, t_out_l = get_thermal_state()
             runs.append(elapsed)
-            print(f"  Run {r+1}: {elapsed:.3f}s (Audio/Wall: {seconds/elapsed:.1f}x) [{t_in_l} -> {t_out_l}]")
+            print(
+                f"  Run {r+1}: {elapsed:.3f}s (Audio/Wall: {seconds/elapsed:.1f}x) [{t_in_l} -> "
+                f"{t_out_l}]"
+            )
 
         med = np.median(runs)
         print(f"  => Median: {med:.3f}s | Audio/Wall Rate: {seconds/med:.1f}x RTFx")

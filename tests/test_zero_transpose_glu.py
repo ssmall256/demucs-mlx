@@ -1,7 +1,8 @@
 """Test and benchmark zero-transpose 2D-coalesced Vectorized Metal GLU kernel."""
 import time
-import numpy as np
+
 import mlx.core as mx
+import numpy as np
 
 _ZERO_TRANSPOSE_GLU_SOURCE = r"""
 uint k = thread_position_in_grid.x;
@@ -213,7 +214,10 @@ def main():
         print(f"  Native (split+sigmoid): {med_nat:6.3f} ms")
         print(f"  Compiled (@mx.compile):  {med_comp:6.3f} ms")
         print(f"  Old Fused (Transposed):  {med_old:6.3f} ms")
-        print(f"  Vectorized Zero-Trans:   {med_new:6.3f} ms  <-- {med_old/med_new:.2f}x vs old, {med_nat/med_new:.2f}x vs native, {med_comp/med_new:.2f}x vs comp")
+        print(
+            f"  Vectorized Zero-Trans:   {med_new:6.3f} ms  <-- {med_old/med_new:.2f}x vs old, "
+            f"{med_nat/med_new:.2f}x vs native, {med_comp/med_new:.2f}x vs comp"
+        )
         print(f"  Max Diff vs Reference:   {err_new:.2e}")
 
 if __name__ == "__main__":

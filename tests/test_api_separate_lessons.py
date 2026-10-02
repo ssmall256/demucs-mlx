@@ -1,9 +1,9 @@
 """Tests for demucs_mlx.api.Separator.separate with unified inputs and async writing."""
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
 import mlx.core as mx
 import numpy as np
-import pytest
 
 from demucs_mlx.api import Separator
 

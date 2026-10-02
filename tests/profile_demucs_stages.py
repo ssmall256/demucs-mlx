@@ -1,8 +1,11 @@
 """Profile each stage of HTDemucs forward pass in isolation and with streams."""
 import time
-import numpy as np
+
 import mlx.core as mx
+import numpy as np
+
 from demucs_mlx.api import Separator
+
 
 def profile():
     sep = Separator(seed=481, batch_size=8)

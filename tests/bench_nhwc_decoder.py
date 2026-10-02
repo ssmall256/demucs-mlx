@@ -1,13 +1,14 @@
 """Benchmark native NHWC spectral decoder vs baseline transposed decoder."""
 import time
-import Foundation
-import numpy as np
+
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from demucs_mlx.api import Separator
 from demucs_mlx.mlx_demucs import _dconv_block_forward_nlc
 from demucs_mlx.mlx_layers import _PhasedWeightCache
+
 
 def signal(seconds: int) -> np.ndarray:
     rng = np.random.default_rng(481 + seconds)
@@ -26,7 +27,8 @@ def forward_dec_nhwc(layer, x_nhwc, skip_nhwc):
         eps = layer.norm1.eps
         n_flat = mx.fast.layer_norm(y_rew.reshape(B, 1, -1), None, None, eps).reshape(y_rew.shape)
         if getattr(layer.norm1, "affine", True) and layer.norm1.weight is not None:
-            y_rew = n_flat * layer.norm1.weight.reshape(1, 1, 1, -1) + layer.norm1.bias.reshape(1, 1, 1, -1)
+            scale = layer.norm1.weight.reshape(1, 1, 1, -1)
+            y_rew = n_flat * scale + layer.norm1.bias.reshape(1, 1, 1, -1)
         else:
             y_rew = n_flat
     # GLU along last axis
@@ -56,9 +58,11 @@ def forward_dec_nhwc(layer, x_nhwc, skip_nhwc):
     if "bias" in conv:
         joined = joined + conv.bias
     if type(layer.norm2).__name__ != 'Identity':
-        joined = mx.fast.layer_norm(joined.reshape(B, 1, -1), None, None, layer.norm2.eps).reshape(joined.shape)
+        flat = joined.reshape(B, 1, -1)
+        joined = mx.fast.layer_norm(flat, None, None, layer.norm2.eps).reshape(joined.shape)
         if getattr(layer.norm2, "affine", True) and layer.norm2.weight is not None:
-            joined = joined * layer.norm2.weight.reshape(1, 1, 1, -1) + layer.norm2.bias.reshape(1, 1, 1, -1)
+            scale = layer.norm2.weight.reshape(1, 1, 1, -1)
+            joined = joined * scale + layer.norm2.bias.reshape(1, 1, 1, -1)
     if layer.pad:
         joined = joined[:, layer.pad:-layer.pad, :, :]
     if not layer.last:
@@ -131,11 +135,20 @@ def main():
         total_nhwc_ms += med_nhwc
         
         print(f"  Layer {idx} (C={C:3d}, Fr={Fr:3d}, T={T:3d}):")
-        print(f"    Reference NCHW: {med_ref:6.2f} ms | NHWC: {med_nhwc:6.2f} ms | Diff: {diff_z:.2e} | Speedup: {med_ref/med_nhwc:.2f}x")
+        print(
+            f"    Reference NCHW: {med_ref:6.2f} ms | NHWC: {med_nhwc:6.2f} ms | "
+            f"Diff z/y: {diff_z:.2e}/{diff_y:.2e} | Speedup: {med_ref/med_nhwc:.2f}x"
+        )
 
     print("-" * 78)
-    print(f"  Total Spectral Decoder per batch: {total_ref_ms:6.2f} ms -> {total_nhwc_ms:6.2f} ms ({total_ref_ms/total_nhwc_ms:.2f}x speedup)")
-    print(f"  Projected savings across 120s (3 batches): {(total_ref_ms - total_nhwc_ms) * 3:.2f} ms")
+    print(
+        f"  Total Spectral Decoder per batch: {total_ref_ms:6.2f} ms -> {total_nhwc_ms:6.2f} ms "
+        f"({total_ref_ms/total_nhwc_ms:.2f}x speedup)"
+    )
+    print(
+        f"  Projected savings across 120s (3 batches): {(total_ref_ms - total_nhwc_ms) * 3:.2f} "
+        "ms"
+    )
 
 if __name__ == "__main__":
     main()

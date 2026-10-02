@@ -1,9 +1,10 @@
 """Benchmark and verify htdemucs_ft with our optimizations."""
 import time
-import Foundation
+
 import numpy as np
-import mlx.core as mx
+
 from demucs_mlx.api import Separator
+
 
 def signal(seconds: int) -> np.ndarray:
     rng = np.random.default_rng(481 + seconds)
@@ -69,7 +70,10 @@ def main():
         times_stem.append(elapsed)
         print(f"  30s vocals-only: {elapsed:.3f}s ({30/elapsed:.1f}x RTFx)")
     med_stem = np.median(times_stem)
-    print(f"  => 30s Single-Stem (Vocals): {med_stem:.3f}s median ({30/med_stem:.1f}x RTFx) [{med_30/med_stem:.2f}x speedup over full ensemble!]")
+    print(
+        f"  => 30s Single-Stem (Vocals): {med_stem:.3f}s median ({30/med_stem:.1f}x RTFx) "
+        f"[{med_30/med_stem:.2f}x speedup over full ensemble!]"
+    )
 
     # 5. Benchmark 120s audio on full ensemble and single-stem
     audio_120 = signal(120)
@@ -83,7 +87,10 @@ def main():
     t0 = time.perf_counter()
     _, stems = sep_ft.separate_tensor(audio_120)
     elapsed_120_full = time.perf_counter() - t0
-    print(f"  120s Full Ensemble (4 models): {elapsed_120_full:.3f}s ({120/elapsed_120_full:.1f}x RTFx)")
+    print(
+        f"  120s Full Ensemble (4 models): {elapsed_120_full:.3f}s ({120/elapsed_120_full:.1f}x "
+        "RTFx)"
+    )
     print("=" * 70)
 
 if __name__ == "__main__":
