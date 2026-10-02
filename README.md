@@ -6,7 +6,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 ## Features
 
-- **Up to 94.8x realtime** on Apple Silicon (M4 Max, measured with the now opt-in fp16 attention; fp32, the default, is ~4% slower) — >3.3x faster than Demucs with PyTorch MPS
+- **Up to 96x realtime** on Apple Silicon (40-core M4 Max, default settings) — >3.3x faster than Demucs with PyTorch MPS
 - **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
 - **Matches upstream Demucs** for every registry model: 72–83 dB SNR per stem against PyTorch on the same input, checked in CI
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
