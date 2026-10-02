@@ -300,7 +300,16 @@ class MultiWrap(nn.Module):
         self.split_ratios = split_ratios
         self.layers = []
         self.conv = isinstance(layer, HEncLayer)
-        self.layers = [deepcopy(layer) for _ in range(len(split_ratios) + 1)]
+        self.layers = []
+        for _ in range(len(split_ratios) + 1):
+            lay = deepcopy(layer)
+            # As upstream: __call__ pads each frequency band itself, so the
+            # wrapped layers must not pad again.
+            if self.conv:
+                lay.conv.conv.padding = (0, 0)
+            else:
+                lay.pad = 0
+            self.layers.append(lay)
 
     def __call__(self, x, skip=None, length=None):
         B, C, Fr, T = x.shape
@@ -323,10 +332,11 @@ class MultiWrap(nn.Module):
                     if start == 0:
                         limit -= pad
                 y = x[:, :, start:limit, :]
+                # Pad the frequency axis, as upstream F.pad(y, (0, 0, pad, 0)).
                 if start == 0:
-                    y = pad1d(y, (pad, 0))
+                    y = mx.pad(y, [(0, 0), (0, 0), (pad, 0), (0, 0)])
                 if ratio == 1:
-                    y = pad1d(y, (0, pad))
+                    y = mx.pad(y, [(0, 0), (0, 0), (0, pad), (0, 0)])
                 outs.append(layer(y))
                 start = limit - layer.kernel_size + layer.stride
             else:
@@ -340,7 +350,9 @@ class MultiWrap(nn.Module):
                 s = skip[:, :, start:limit]
                 out, _ = layer(y, s, None)
                 if outs:
-                    outs[-1][:, :, -layer.stride:] += out[:, :, :layer.stride]
+                    # The overlapping rows carry the transposed-conv bias twice.
+                    bias = layer.conv_tr.conv.bias.reshape(1, -1, 1, 1)
+                    outs[-1][:, :, -layer.stride:] += out[:, :, :layer.stride] - bias
                     out = out[:, :, layer.stride:]
                 if ratio == 1:
                     out = out[:, :, :-layer.stride // 2, :]
@@ -653,7 +665,9 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
                     niters,
                     residual=residual,
                 )
-                out_chunks.append(z_out.transpose(0, 1, 2, 4, 3))
+                # wiener() already returns [frames, F, C, S, 2]; upstream's
+                # transpose(-1, -2) converts its own [..., 2, S] layout to this.
+                out_chunks.append(z_out)
             return mx.concatenate(out_chunks, axis=0)
 
         # Apply vmap over batch dimension
@@ -675,13 +689,13 @@ class HDemucsMLX(MLXStateDictMixin, nn.Module):
 
         B, C, Fq, T = x.shape
         mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
-        std = mx.std(x, axis=(1, 2, 3), keepdims=True)
+        std = mx.std(x, axis=(1, 2, 3), keepdims=True, ddof=1)
         x = (x - mean) / (1e-5 + std)
 
         if self.hybrid:
             xt = mix
             meant = mx.mean(xt, axis=(1, 2), keepdims=True)
-            stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+            stdt = mx.std(xt, axis=(1, 2), keepdims=True, ddof=1)
             xt = (xt - meant) / (1e-5 + stdt)
 
         saved = []

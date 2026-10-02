@@ -726,12 +726,12 @@ for (int k = first_k; k <= last_k; ++k) {
     int j = (int)t - offset;
     if (j >= 0 && j < (int)chunk_len) {
         float w = (float)window[j];
-        uint frame_idx = (uint)k * num_channels * chunk_len + ch * chunk_len + (uint)j;
+        ulong frame_idx = ((ulong)k * num_channels + ch) * chunk_len + (ulong)j;
         acc += (float)frames[frame_idx] * w;
         wsum += w;
     }
 }
-out[ch * total_samples + t] = (T)((wsum > 1e-11f) ? (acc / wsum) : 0.0f);
+out[(ulong)ch * total_samples + t] = (T)((wsum > 1e-11f) ? (acc / wsum) : 0.0f);
 """
 
 _overlap_add_kernel = None
@@ -808,6 +808,10 @@ def fused_overlap_add(
     num_chunks = orig_shape[0]
     prefix_shape = orig_shape[1:-1]
     chunk_len = orig_shape[-1]
+    if window.ndim != 1 or window.shape[0] != chunk_len:
+        raise ValueError(
+            f"window must have shape ({chunk_len},) to match the frames, got {tuple(window.shape)}"
+        )
 
     if num_chunks == 0 or total_samples == 0:
         return mx.zeros((*prefix_shape, total_samples), dtype=frames.dtype)

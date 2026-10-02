@@ -8,7 +8,6 @@ Optimized and Corrected:
 from __future__ import annotations
 
 import math
-import os
 import typing as tp
 from functools import lru_cache
 
@@ -32,137 +31,62 @@ from .mlx_utils import (
 # ---------------------------------------------------------------------------
 # Pure-MLX resampling (factor-2 only)
 #
-# Demucs uses a simple 2x upsample at the input of the time-domain model and a
-# corresponding 2x downsample at the output when `self.resample` is enabled.
-#
-# This implementation avoids Torch/Torchaudio and keeps the inference path
-# entirely in MLX. It uses a windowed-sinc low-pass (Hann window) + polyphase
-# up/down for good quality and stable performance.
+# Demucs upsamples its input x2 before the time-domain network and downsamples
+# the output /2 when `self.resample` is set, with julius.resample_frac. This is
+# the same algorithm in MLX: a windowed-sinc kernel with `zeros` zero crossings
+# and a `rolloff` low-pass, one phase per output sample, edge padding, and the
+# output truncated to floor(new_sr * length / old_sr). Any other filter changes
+# the model's output well above float noise.
 # ---------------------------------------------------------------------------
 
-_RESAMPLE_FIR_CACHE: dict[tuple[int, float, str], mx.array] = {}
-
-def _lowpass_fir_hann(numtaps: int, cutoff_cycles: float, dtype: mx.Dtype) -> mx.array:
-    """Design a symmetric low-pass FIR using a Hann-windowed sinc.
-
-    Args:
-        numtaps: odd number of taps (e.g., 63)
-        cutoff_cycles: cutoff in cycles/sample (Nyquist=0.5)
-        dtype: mx.float32 / mx.float16, etc.
-
-    Returns:
-        (numtaps,) filter, normalized to DC gain 1.0
-    """
-    if numtaps % 2 == 0:
-        raise ValueError("numtaps must be odd for symmetric 'same' padding")
-
-    key = (int(numtaps), float(cutoff_cycles), str(dtype))
-    h = _RESAMPLE_FIR_CACHE.get(key)
-    if h is not None:
-        return h
-
-    n = mx.arange(numtaps, dtype=mx.float32)
-    M = (numtaps - 1) / 2.0
-    t = n - M
-
-    # sinc(2*fc*t) where fc is cycles/sample, Nyquist = 0.5
-    x = 2.0 * float(cutoff_cycles) * t
-    # sin(pi*x)/(pi*x), define sinc(0)=1
-    sinc = mx.where(t == 0, mx.ones_like(t), mx.sin(math.pi * x) / (math.pi * x))
-
-    # Hann window
-    w = 0.5 - 0.5 * mx.cos(2.0 * math.pi * n / float(numtaps - 1))
-
-    h = (2.0 * float(cutoff_cycles)) * sinc * w
-    h = h / mx.sum(h)
-
-    h = h.astype(dtype)
-    _RESAMPLE_FIR_CACHE[key] = h
-    return h
+_RESAMPLE_KERNEL_CACHE: dict[tuple[int, int, int, float], tuple[mx.array, int]] = {}
 
 
-def _reflect_pad_last(x: mx.array, pad_left: int, pad_right: int) -> mx.array:
-    """Reflect-pad on the last dimension. Works for any ndim >= 1."""
-    L = x.shape[-1]
-    if L <= 1:
-        # Can't reflect with 1 or 0 elements, fall back to edge
-        return mx.pad(x, [(0, 0)] * (x.ndim - 1) + [(pad_left, pad_right)], mode="edge")
-    parts = []
-    if pad_left > 0:
-        left = x[..., 1: pad_left + 1][..., ::-1]
-        parts.append(left)
-    parts.append(x)
-    if pad_right > 0:
-        right = x[..., -pad_right - 1: -1][..., ::-1]
-        parts.append(right)
-    return mx.concatenate(parts, axis=-1)
+def _julius_kernel(old_sr: int, new_sr: int, zeros: int = 24, rolloff: float = 0.945):
+    """Return (kernel [new_sr, K, 1] for an NLC conv1d, width), as julius.ResampleFrac."""
+    key = (old_sr, new_sr, zeros, rolloff)
+    cached = _RESAMPLE_KERNEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    sr = min(new_sr, old_sr) * rolloff
+    width = math.ceil(zeros * old_sr / sr)
+    idx = mx.arange(-width, width + old_sr, dtype=mx.float32)
+    kernels = []
+    for i in range(new_sr):
+        t = (-i / new_sr + idx / old_sr) * sr
+        t = mx.clip(t, -zeros, zeros) * math.pi
+        window = mx.cos(t / zeros / 2) ** 2
+        sinc = mx.where(t == 0, mx.ones_like(t), mx.sin(t) / mx.where(t == 0, mx.ones_like(t), t))
+        kernel = sinc * window
+        kernels.append(kernel / mx.sum(kernel))
+    kernel = mx.stack(kernels)[..., None]
+    mx.eval(kernel)
+    _RESAMPLE_KERNEL_CACHE[key] = (kernel, width)
+    return kernel, width
 
 
-_RESAMPLE_CONV_CACHE: dict[tuple[int, str], nn.Conv1d] = {}
-
-
-def _get_depthwise_fir_conv(num_channels: int, h: mx.array) -> nn.Conv1d:
-    """Get or create a depthwise Conv1d that applies FIR filter h to each channel."""
-    key = (num_channels, id(h))
-    conv = _RESAMPLE_CONV_CACHE.get(key)
-    if conv is not None:
-        return conv
-
-    k = int(h.shape[0])
-    # groups=num_channels makes it depthwise (each channel filtered independently)
-    conv = nn.Conv1d(
-        in_channels=num_channels,
-        out_channels=num_channels,
-        kernel_size=k,
-        stride=1,
-        padding=0,  # we handle reflect padding ourselves
-        bias=False,
-        groups=num_channels,
-    )
-    # Weight shape for MLX depthwise Conv1d: (C, K, 1)
-    # Same filter for every channel
-    w = mx.broadcast_to(h.reshape(1, -1, 1), (num_channels, k, 1))
-    conv.weight = w
-    conv.eval()
-    _RESAMPLE_CONV_CACHE[key] = conv
-    return conv
-
-
-def _conv1d_same_ncl(x: mx.array, h: mx.array) -> mx.array:
-    """Depthwise FIR 'same' conv for x in (N, C, L) using native Conv1d."""
-    k = int(h.shape[0])
-    pad = k // 2
-    # Reflect padding reduces edge artifacts vs constant(0)
-    xpad = _reflect_pad_last(x, pad, pad)
-    # NCL -> NLC for MLX Conv1d
-    xpad_nlc = xpad.transpose(0, 2, 1)
-    C = x.shape[1]
-    conv = _get_depthwise_fir_conv(C, h)
-    y = conv(xpad_nlc)
-    # NLC -> NCL
-    return y.transpose(0, 2, 1)
+def _resample_frac(x: mx.array, old_sr: int, new_sr: int) -> mx.array:
+    """julius.resample_frac(x, old_sr, new_sr) for x of shape (..., T)."""
+    kernel, width = _julius_kernel(old_sr, new_sr)
+    shape = x.shape
+    length = shape[-1]
+    flat = x.reshape(-1, length).astype(mx.float32)
+    flat = mx.pad(flat, [(0, 0), (width, width + old_sr)], mode="edge")
+    # NLC conv with stride old_sr: (N, L', new_sr), one channel per phase.
+    phases = mx.conv1d(flat[..., None], kernel, stride=old_sr)
+    y = phases.reshape(*shape[:-1], -1)
+    out_length = (new_sr * length) // old_sr
+    return y[..., :out_length].astype(x.dtype)
 
 
 def _resample_2x(x: mx.array) -> mx.array:
-    """Upsample by 2 with zero-insertion + low-pass FIR."""
-    B, C, L = x.shape
-    # Interleave zeros: (B, C, L, 2) -> (B, C, 2L)
-    x_up = mx.stack([x, mx.zeros_like(x)], axis=-1).reshape(B, C, 2 * L)
-
-    # Half-band cutoff: fs/4 -> cycles/sample=0.25 (Nyquist=0.5)
-    h = _lowpass_fir_hann(numtaps=63, cutoff_cycles=0.25, dtype=mx.float32)
-
-    y = _conv1d_same_ncl(x_up.astype(mx.float32), h) * 2.0  # scale by up factor
-    return y.astype(x.dtype)
+    """Upsample by 2 (julius.resample_frac(x, 1, 2))."""
+    return _resample_frac(x, 1, 2)
 
 
 def _resample_half(x: mx.array) -> mx.array:
-    """Downsample by 2 with low-pass FIR + decimation."""
-    h = _lowpass_fir_hann(numtaps=63, cutoff_cycles=0.25, dtype=mx.float32)
-    y = _conv1d_same_ncl(x.astype(mx.float32), h)
-    y = y[..., ::2]
-    return y.astype(x.dtype)
-
+    """Downsample by 2 (julius.resample_frac(x, 2, 1))."""
+    return _resample_frac(x, 2, 1)
 
 
 def _dtype_from_str(dtype_str: str) -> mx.Dtype:
@@ -362,10 +286,9 @@ class LocalState(nn.Module):
         weights = mx.softmax(dots, axis=2)
         
         content = self.content(x).reshape(B, heads, -1, T)
-        
-        content_t = content.transpose(0, 1, 3, 2)
-        result_t = mx.matmul(weights, content_t)
-        result = result_t.transpose(0, 1, 3, 2)
+        # result[c, s] = sum_t content[c, t] * weights[t, s]  (upstream einsum
+        # "bhts,bhct->bhcs"); the softmax above normalizes over t (keys).
+        result = mx.matmul(content, weights)
 
         if self.nfreqs:
             time_sig = mx.einsum("bhts,fts->bhfs", weights, freq_kernel)
@@ -454,10 +377,12 @@ class DConv(nn.Module):
         if use_nlc:
             if compile_enabled:
                 signature = _dconv_chain_signature(layers)
-                if self._compiled_signatures != signature:
-                    self._compiled_layers = _compile_dconv_chain(layers)
+                compiled = self._compiled_layers
+                if compiled is None or self._compiled_signatures != signature:
+                    compiled = _compile_dconv_chain(layers)
+                    self._compiled_layers = compiled
                     self._compiled_signatures = signature
-                return self._compiled_layers(x)
+                return compiled(x)
             return _dconv_chain_forward_nlc(layers, x)
         for layer in layers:
             x = x + layer(x)
@@ -465,7 +390,7 @@ class DConv(nn.Module):
 
 
 def _can_use_dconv_nlc(layers: list[nn.Module]) -> bool:
-    """Check if all blocks in DConv have standard 7-layer structure without custom attention/LSTM."""
+    """Whether every DConv block has the standard 7-layer structure (no attention or LSTM)."""
     for block in layers:
         if not hasattr(block, "layers") or len(block.layers) != 7:
             return False
@@ -514,7 +439,7 @@ def _dconv_block_forward_nlc(block: nn.Module, x_nlc: mx.array) -> mx.array:
 
 
 def _dconv_chain_forward_nlc(layers: list[nn.Module], x_ncl: mx.array) -> mx.array:
-    """Run all DConv blocks with single input/output transposes, avoiding internal layout conversion."""
+    """Run all DConv blocks with one input and one output transpose, not one per layer."""
     x_nlc = x_ncl.transpose(0, 2, 1)
     for block in layers:
         x_nlc = x_nlc + _dconv_block_forward_nlc(block, x_nlc)
@@ -529,7 +454,7 @@ def _compile_dconv_chain(layers: list[nn.Module]):
     return mx.compile(forward)
 
 
-def _dconv_chain_signature(layers: list[nn.Module]) -> tuple[int, ...]:
+def _dconv_chain_signature(layers: list[nn.Module]) -> tuple[tuple[int, ...], ...]:
     """Invalidate captured weights when any block in the chain is edited."""
     return tuple(_dconv_block_signature(layer) for layer in layers)
 
@@ -688,7 +613,7 @@ class DemucsMLX(MLXStateDictMixin, nn.Module):
         if self.normalize:
             mono = mx.mean(mix, axis=1, keepdims=True)
             mean = mx.mean(mono, axis=-1, keepdims=True)
-            std = mx.std(mono, axis=-1, keepdims=True)
+            std = mx.std(mono, axis=-1, keepdims=True, ddof=1)
             x = (x - mean) / (1e-5 + std)
         else:
             mean = 0

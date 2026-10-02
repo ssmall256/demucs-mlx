@@ -271,7 +271,8 @@ def wiener(
     else:
         # Phase copying
         # mix_complex: (F, B, C)
-        angle = mx.angle(mix_complex)[..., None] # (F, B, C, 1)
+        # MLX has no angle(); upstream uses atan2 of the parts as well.
+        angle = mx.arctan2(mx.imag(mix_complex), mx.real(mix_complex))[..., None]  # (F, B, C, 1)
         # targets: (F, B, C, S)
         # Euler's formula: mag * exp(1j * angle)
         y = targets_spectrograms.astype(mx.complex64) * mx.exp(1j * angle)

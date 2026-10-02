@@ -4,13 +4,16 @@ MLX transformer blocks for HTDemucs (dense attention only).
 from __future__ import annotations
 
 import math
+import os
 import random
+import typing as tp
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from .mlx_demucs import LayerScale
 from .mlx_hdemucs import ScaledEmbedding
+from .mlx_utils import thread_side_stream
 
 
 def create_sin_embedding(length: int, dim: int, shift: int = 0, max_period: float = 10000.0):
@@ -103,73 +106,107 @@ class MyGroupNorm(nn.Module):
         return self.gn(x)
 
 
+_ATTENTION_DTYPES = {"fp32": mx.float32, "fp16": mx.float16}
+
+
+def _default_attention_dtype() -> mx.Dtype:
+    raw = os.getenv("DEMUCS_MLX_ATTENTION_FP16", "").strip().lower()
+    return mx.float16 if raw in {"1", "true", "yes", "on"} else mx.float32
+
+
+def resolve_attention_dtype(precision: tp.Optional[str]) -> mx.Dtype:
+    """'fp32', 'fp16', or None for the default (fp32 unless DEMUCS_MLX_ATTENTION_FP16=1)."""
+    if precision is None:
+        return _default_attention_dtype()
+    try:
+        return _ATTENTION_DTYPES[str(precision).lower()]
+    except KeyError:
+        raise ValueError(
+            f"attention precision must be 'fp32' or 'fp16', got {precision!r}"
+        ) from None
+
+
+def set_attention_dtype(model: nn.Module, dtype: mx.Dtype) -> None:
+    """Set the compute dtype of every attention layer in ``model``.
+
+    Call before the model first runs: compiled forwards capture the weights.
+    """
+    for _, module in model.named_modules():
+        if isinstance(module, FastMultiHeadAttention):
+            module.set_compute_dtype(dtype)
+
+
 class FastMultiHeadAttention(nn.MultiHeadAttention):
+    """Multi-head attention with fused QKV projections and fast SDPA.
+
+    Computes in float32 by default, which matches upstream Demucs to 81-87 dB
+    SNR. float16 (``set_attention_dtype`` or DEMUCS_MLX_ATTENTION_FP16=1) is
+    about 4% faster end to end on htdemucs and matches to 72-79 dB.
+    """
+
+    _CAST_NAMES = ("query_proj_c", "key_proj_c", "value_proj_c", "out_proj_c")
+
     def __init__(self, dims: int, num_heads: int, bias: bool = True):
         super().__init__(dims, num_heads, bias=bias)
-        self._fused_initialized = False
+        self.compute_dtype: tp.Optional[mx.Dtype] = None
+        self._fused_dtype: tp.Optional[mx.Dtype] = None
+
+    def set_compute_dtype(self, dtype: tp.Optional[mx.Dtype]) -> None:
+        self.compute_dtype = dtype
+        self._fused_dtype = None
+
+    @staticmethod
+    def _linear(layers, dtype) -> nn.Linear:
+        weight = mx.concatenate([layer.weight for layer in layers], axis=0).astype(dtype)
+        bias = mx.concatenate([layer.bias for layer in layers], axis=0).astype(dtype)
+        fused = nn.Linear(weight.shape[1], weight.shape[0])
+        fused.weight = weight
+        fused.bias = bias
+        return fused
 
     def _ensure_fused(self):
-        if getattr(self, "_fused_initialized", False):
+        dtype = self.compute_dtype
+        if dtype is None:
+            dtype = _default_attention_dtype()
+        if self._fused_dtype is not None and self._fused_dtype == dtype:
             return
-        C = self.query_proj.weight.shape[1]
-        self.qkv_proj = nn.Linear(C, 3 * C)
-        qkv_w = mx.concatenate(
-            [self.query_proj.weight, self.key_proj.weight, self.value_proj.weight], axis=0
-        ).astype(mx.float16)
-        qkv_b = mx.concatenate(
-            [self.query_proj.bias, self.key_proj.bias, self.value_proj.bias], axis=0
-        ).astype(mx.float16)
-        self.qkv_proj.weight = qkv_w
-        self.qkv_proj.bias = qkv_b
+        q, k, v, o = self.query_proj, self.key_proj, self.value_proj, self.out_proj
+        self.qkv_proj = self._linear((q, k, v), dtype)
+        self.kv_proj = self._linear((k, v), dtype)
+        for name in self._CAST_NAMES:
+            if name in self:
+                del self[name]
+        if dtype != mx.float32:
+            # float32 reuses the loaded projections; other dtypes need casts.
+            for name, layer in zip(self._CAST_NAMES, (q, k, v, o)):
+                setattr(self, name, self._linear((layer,), dtype))
+        self._fused_dtype = dtype
 
-        self.kv_proj = nn.Linear(C, 2 * C)
-        kv_w = mx.concatenate(
-            [self.key_proj.weight, self.value_proj.weight], axis=0
-        ).astype(mx.float16)
-        kv_b = mx.concatenate(
-            [self.key_proj.bias, self.value_proj.bias], axis=0
-        ).astype(mx.float16)
-        self.kv_proj.weight = kv_w
-        self.kv_proj.bias = kv_b
-
-        self.query_proj_fp16 = nn.Linear(C, C)
-        self.query_proj_fp16.weight = self.query_proj.weight.astype(mx.float16)
-        self.query_proj_fp16.bias = self.query_proj.bias.astype(mx.float16)
-
-        self.key_proj_fp16 = nn.Linear(C, C)
-        self.key_proj_fp16.weight = self.key_proj.weight.astype(mx.float16)
-        self.key_proj_fp16.bias = self.key_proj.bias.astype(mx.float16)
-
-        self.value_proj_fp16 = nn.Linear(C, C)
-        self.value_proj_fp16.weight = self.value_proj.weight.astype(mx.float16)
-        self.value_proj_fp16.bias = self.value_proj.bias.astype(mx.float16)
-
-        self.out_proj_fp16 = nn.Linear(C, C)
-        self.out_proj_fp16.weight = self.out_proj.weight.astype(mx.float16)
-        self.out_proj_fp16.bias = self.out_proj.bias.astype(mx.float16)
-
-        self._fused_initialized = True
+    def _projection(self, name: str) -> nn.Linear:
+        if self._fused_dtype == mx.float32:
+            return getattr(self, f"{name}_proj")
+        return getattr(self, f"{name}_proj_c")
 
     def __call__(self, queries: mx.array, keys: mx.array, values: mx.array, mask=None) -> mx.array:
         self._ensure_fused()
+        dtype = self._fused_dtype
         heads = self.num_heads
         orig_dtype = queries.dtype
-        q_fp16 = queries.astype(mx.float16)
+        queries_c = queries.astype(dtype)
 
         if queries is keys and keys is values:
-            qkv = self.qkv_proj(q_fp16)
+            qkv = self.qkv_proj(queries_c)
             C = queries.shape[-1]
             q, k, v = mx.split(qkv, [C, 2 * C], axis=-1)
         elif keys is values:
-            q = self.query_proj_fp16(q_fp16)
-            k_fp16 = keys.astype(mx.float16)
-            kv = self.kv_proj(k_fp16)
+            q = self._projection("query")(queries_c)
+            kv = self.kv_proj(keys.astype(dtype))
             C = keys.shape[-1]
             k, v = mx.split(kv, [C], axis=-1)
         else:
-            q = self.query_proj_fp16(q_fp16)
-            k = self.key_proj_fp16(keys.astype(mx.float16))
-            v = self.value_proj_fp16(values.astype(mx.float16))
+            q = self._projection("query")(queries_c)
+            k = self._projection("key")(keys.astype(dtype))
+            v = self._projection("value")(values.astype(dtype))
 
         q = mx.unflatten(q, -1, (heads, -1)).transpose(0, 2, 1, 3)
         k = mx.unflatten(k, -1, (heads, -1)).transpose(0, 2, 1, 3)
@@ -177,7 +214,7 @@ class FastMultiHeadAttention(nn.MultiHeadAttention):
         scale = math.sqrt(1 / q.shape[-1])
         output = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask)
         output = output.transpose(0, 2, 1, 3).flatten(-2, -1)
-        res = self.out_proj_fp16(output)
+        res = self._projection("out")(output)
         return res.astype(orig_dtype)
 
 
@@ -465,10 +502,7 @@ class CrossTransformerEncoder(nn.Module):
         x = x + self.weight_pos_embed * pos_emb_2d
 
         B, C, T2 = xt.shape
-        s_side = getattr(self, "_stream_side", None)
-        if s_side is None:
-            s_side = mx.new_stream(mx.default_device())
-            self._stream_side = s_side
+        s_side = thread_side_stream()
 
         with mx.stream(s_side):
             xt = xt.transpose(0, 2, 1)
@@ -483,10 +517,13 @@ class CrossTransformerEncoder(nn.Module):
                     xt = self.layers_t[idx](xt)
                 x = self.layers[idx](x)
             else:
+                # Both cross-attention layers read the other branch's input
+                # to this layer, matching upstream Demucs.
                 old_x = x
+                old_xt = xt
                 with mx.stream(s_side):
                     xt = self.layers_t[idx](xt, old_x)
-                x = self.layers[idx](x, xt)
+                x = self.layers[idx](x, old_xt)
 
         with mx.stream(s_side):
             xt = xt.transpose(0, 2, 1)
