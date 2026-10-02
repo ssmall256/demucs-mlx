@@ -257,6 +257,76 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+# A verified-digest stamp lets later loads skip re-hashing an unchanged file.
+# The stamp records the digest together with the file's identity: size,
+# mtime, inode, device and ctime. Writing the file through the filesystem
+# changes its ctime, which only root can set, so a stamp only matches a file
+# nobody has written since it was hashed. Any mismatch (or no stamp) falls
+# back to the full SHA-256. Silent media corruption is not caught by the fast
+# path; safetensors never executes code on load, so the digest guards
+# integrity, not code execution.
+VERIFIED_STAMP_SUFFIX = ".verified.json"
+VERIFIED_STAMP_LIMIT = 4096
+
+
+def _file_identity(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+        "ino": stat.st_ino,
+        "dev": stat.st_dev,
+    }
+
+
+def _verified_stamp_path(path: Path) -> Path:
+    return path.with_name(path.name + VERIFIED_STAMP_SUFFIX)
+
+
+def _stamp_matches(path: Path, digest: str, identity: dict[str, int]) -> bool:
+    try:
+        raw = _verified_stamp_path(path).read_bytes()
+        if len(raw) > VERIFIED_STAMP_LIMIT:
+            return False
+        stamp = json.loads(raw)
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(stamp, dict)
+        and stamp.get("sha256") == digest
+        and stamp.get("identity") == identity
+    )
+
+
+def _write_verified_stamp(path: Path, digest: str, identity: dict[str, int]) -> None:
+    temporary: tp.Optional[str] = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".stamp", dir=path.parent)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"sha256": digest, "identity": identity}, handle, sort_keys=True)
+        os.replace(temporary, _verified_stamp_path(path))
+        temporary = None
+    except OSError:
+        pass  # A read-only cache only costs the full hash on the next load.
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def _verify_safetensors_digest(path: Path, expected: str) -> bool:
+    """True when ``path`` hashes to ``expected``, re-hashing only when it changed."""
+    identity = _file_identity(path)
+    if _stamp_matches(path, expected, identity):
+        return True
+    if _sha256_file(path) != expected:
+        return False
+    # Stamp only if the file did not change while it was being hashed.
+    if _file_identity(path) == identity:
+        _write_verified_stamp(path, expected, identity)
+    return True
+
+
 def _regeneration_command(model_name: str, cache_dir: tp.Union[str, Path]) -> str:
     return (
         "python -m demucs_mlx.mlx_convert "
@@ -1160,8 +1230,7 @@ def load_mlx_model_from_safetensors(
         )
 
     config = _load_safe_cache_config(config_path, model_name)
-    actual_digest = _sha256_file(safetensors_path)
-    if actual_digest != config["safetensors_sha256"]:
+    if not _verify_safetensors_digest(safetensors_path, config["safetensors_sha256"]):
         raise SafeCacheError(
             f"Demucs safetensors digest mismatch for {safetensors_path}; "
             f"regenerate it with: {regeneration}"

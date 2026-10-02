@@ -23,6 +23,13 @@ and the README after the fact.
   count in-process (sysctlbyname, IOKit) instead of spawning `sysctl` three
   times and `ioreg` once: 0.2 ms instead of 21-26 ms per run, with identical
   results on M4 Pro, 32-core and 40-core M4 Max.
+- Loading a cached model no longer re-hashes its weights on every run (~70 ms
+  saved per run; htdemucs loads in ~30 ms instead of ~100 ms). After a full
+  SHA-256 check passes, a `.verified.json` stamp next to the weights records the
+  digest with the file's size, mtime, inode, device and ctime; later loads skip
+  the hash only while all of those match, so any write to the file through the
+  filesystem brings the full check back. Safetensors cannot execute code on
+  load, so the digest only guards against corrupted caches.
 
 ## 1.5.2 - 2026-10-02
 
