@@ -8,14 +8,15 @@ Investigates:
 """
 import os
 import time
+
 import Foundation
-import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
-from demucs_mlx.metal_kernels import fused_glu, fused_groupnorm_gelu, fused_groupnorm_glu, HAS_METAL
-from demucs_mlx.mlx_layers import _group_norm_via_layer_norm, GLUNCL
 from demucs_mlx.api import Separator
+from demucs_mlx.metal_kernels import fused_glu, fused_groupnorm_gelu
+from demucs_mlx.mlx_layers import _group_norm_via_layer_norm
 
 THERMAL_NAMES = ["nominal", "fair", "serious", "critical"]
 
@@ -102,7 +103,10 @@ def bench_glu():
         print(f"\nShape {shape} - {desc}:")
         print(f"  Native (split+sigmoid): {med_nat:6.3f} ms")
         print(f"  Compiled (@mx.compile):  {med_comp:6.3f} ms ({med_nat/med_comp:.2f}x vs native)")
-        print(f"  Fused Metal (fused_glu): {med_fused:6.3f} ms ({med_nat/med_fused:.2f}x vs native, {med_comp/med_fused:.2f}x vs comp)")
+        print(
+            f"  Fused Metal (fused_glu): {med_fused:6.3f} ms ({med_nat/med_fused:.2f}x vs "
+            f"native, {med_comp/med_fused:.2f}x vs comp)"
+        )
         print(f"  Max Error vs Native: Fused={err_fused:.2e}, Comp={err_comp:.2e}")
 
 def bench_groupnorm_gelu():
@@ -165,7 +169,10 @@ def bench_groupnorm_gelu():
 
         print(f"\nShape {shape}, G={G} - {desc}:")
         print(f"  Unfused (mx.fast.layer_norm + gelu): {med_unf:6.3f} ms")
-        print(f"  Fused Metal (fused_groupnorm_gelu):  {med_fused:6.3f} ms ({med_unf/med_fused:.2f}x speedup)")
+        print(
+            f"  Fused Metal (fused_groupnorm_gelu):  {med_fused:6.3f} ms "
+            f"({med_unf/med_fused:.2f}x speedup)"
+        )
         print(f"  Max Abs Diff: {err:.2e} | Rel Diff: {rel_err:.2e}")
 
 def bench_end_to_end_switch():
@@ -185,7 +192,10 @@ def bench_end_to_end_switch():
 
     for val in ("0", "1"):
         os.environ["DEMUCS_MLX_USE_FUSED_GN_GLU"] = val
-        mode_label = "UNFUSED (Default mx.fast.layer_norm)" if val == "0" else "FUSED (Custom Metal GN+GELU/GLU)"
+        if val == "0":
+            mode_label = "UNFUSED (Default mx.fast.layer_norm)"
+        else:
+            mode_label = "FUSED (Custom Metal GN+GELU/GLU)"
         print(f"\n--- Testing DEMUCS_MLX_USE_FUSED_GN_GLU={val} [{mode_label}] ---")
 
         wait_for_cool_silicon(min_cooldown=5.0)
@@ -204,7 +214,10 @@ def bench_end_to_end_switch():
             elapsed = time.perf_counter() - t0
             t_out_s, t_out_l = get_thermal_state()
             runs.append(elapsed)
-            print(f"  Run {r+1}: {elapsed:.3f}s (Audio/Wall: {120/elapsed:.1f}x) [{t_in_l} -> {t_out_l}]")
+            print(
+                f"  Run {r+1}: {elapsed:.3f}s (Audio/Wall: {120/elapsed:.1f}x) [{t_in_l} -> "
+                f"{t_out_l}]"
+            )
 
         med = np.median(runs)
         print(f"  => Median: {med:.3f}s | Audio/Wall Rate: {120/med:.1f}x RTFx")

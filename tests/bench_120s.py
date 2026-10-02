@@ -1,5 +1,6 @@
 """Benchmark 120s audio throughput with thermal gating and fidelity checks."""
 import time
+
 import Foundation
 import numpy as np
 
@@ -32,8 +33,12 @@ def signal(seconds: int) -> np.ndarray:
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[8], help="Batch sizes to test (default: 8)")
-    parser.add_argument("--seconds", type=int, default=120, help="Audio length in seconds (default: 120)")
+    parser.add_argument(
+        "--batch-sizes", nargs="+", type=int, default=[8], help="Batch sizes to test (default: 8)"
+    )
+    parser.add_argument(
+        "--seconds", type=int, default=120, help="Audio length in seconds (default: 120)"
+    )
     args = parser.parse_args()
 
     seconds = args.seconds
@@ -42,7 +47,10 @@ def main():
 
     for b in args.batch_sizes:
         print(f"\n### Batch Size {b} (Thermally Gated ABBA)", flush=True)
-        print("| Round | Order | Path | Thermal In->Out | Wall Time | Audio/Wall (RTFx) |", flush=True)
+        print(
+            "| Round | Order | Path | Thermal In->Out | Wall Time | Audio/Wall (RTFx) |",
+            flush=True,
+        )
         print("|:---:|:---:|:---:|:---:|:---:|:---:|", flush=True)
 
         gpu = Separator(seed=481, batch_size=b)
@@ -50,7 +58,9 @@ def main():
             # Warmup with full batch and audio length so all chunk shape paths are primed
             gpu.separate_tensor(signal(seconds))
             ane.separate_tensor(signal(seconds))
-            import mlx.core as mx, gc
+            import gc
+
+            import mlx.core as mx
             mx.clear_cache()
             gc.collect()
             wait_for_cool_silicon(min_cooldown=3.0)
@@ -82,7 +92,11 @@ def main():
                     thermal_trans = f"{t_in_label}->{t_out_label}"
                     rtfx = seconds / elapsed
 
-                    print(f"| {r_idx} | {'->'.join(order)} | {name} | {thermal_trans} | **{elapsed:.3f}s** | **{rtfx:.1f}x** |", flush=True)
+                    print(
+                        f"| {r_idx} | {'->'.join(order)} | {name} | {thermal_trans} | "
+                        f"**{elapsed:.3f}s** | **{rtfx:.1f}x** |",
+                        flush=True,
+                    )
 
             gpu_med = np.median(round_times["GPU"])
             ane_med = np.median(round_times["ANE"])

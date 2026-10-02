@@ -1,9 +1,11 @@
 """Thermally gated, balanced alternating (ABBA) benchmark for ANE and GPU paths.
 
 Run through metalq:
-    metalq submit -w -n bench_thermally_gated -- uv run --extra ane python tests/bench_thermally_gated_ane.py
+    metalq submit -w -n bench_thermally_gated -- \
+        uv run --extra ane python tests/bench_thermally_gated_ane.py
 """
 import time
+
 import Foundation
 import numpy as np
 
@@ -52,8 +54,15 @@ def main():
     print("**Protocol:**", flush=True)
     print("- Gated to `nominal` thermal state before every single run", flush=True)
     print("- 5-second physical cooldown between runs to dissipate junction heat", flush=True)
-    print("- Balanced alternating order: Round 1 (GPU->ANE), Round 2 (ANE->GPU), Round 3 (ANE->GPU), Round 4 (GPU->ANE)", flush=True)
-    print(f"- Shifts=1, overlap=0.25, split=True, batch_size={b_size}, compile={comp}, seed=481\n", flush=True)
+    print(
+        "- Balanced alternating order: Round 1 (GPU->ANE), Round 2 (ANE->GPU), Round 3 "
+        "(ANE->GPU), Round 4 (GPU->ANE)",
+        flush=True,
+    )
+    print(
+        f"- Shifts=1, overlap=0.25, split=True, batch_size={b_size}, compile={comp}, seed=481\n",
+        flush=True,
+    )
 
     gpu = Separator(seed=481, batch_size=b_size, compile=comp)
     with Separator(seed=481, ane_time_encoder=True, batch_size=b_size, compile=comp) as ane:
@@ -69,7 +78,8 @@ def main():
             audio = signal(seconds)
             print(f"### {seconds}s Audio Benchmark", flush=True)
             print(
-                "| Round | Order | Path | Thermal In->Out | Wall Time | Audio/Wall | ANE Busy | ANE Wait | ANE Xfer |",
+                "| Round | Order | Path | Thermal In->Out | Wall Time | Audio/Wall "
+                "| ANE Busy | ANE Wait | ANE Xfer |",
                 flush=True,
             )
             print("|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|", flush=True)
@@ -110,7 +120,8 @@ def main():
 
                     print(
                         f"| {r_idx} | {'->'.join(order)} | {name} | {thermal_trans} | "
-                        f"**{elapsed:.3f}s** | {seconds / elapsed:.1f}x | {ane_busy} | {ane_wait} | {ane_xfer} |",
+                        f"**{elapsed:.3f}s** | {seconds / elapsed:.1f}x | "
+                        f"{ane_busy} | {ane_wait} | {ane_xfer} |",
                         flush=True,
                     )
 
@@ -121,9 +132,21 @@ def main():
             ane_mean = np.mean(round_times["ANE"])
 
             print(f"\n**{seconds}s Summary (Median / Mean):**", flush=True)
-            print(f"- GPU: {gpu_med:.3f}s median ({gpu_mean:.3f}s mean, stdev={np.std(round_times['GPU']):.3f}s)", flush=True)
-            print(f"- ANE: {ane_med:.3f}s median ({ane_mean:.3f}s mean, stdev={np.std(round_times['ANE']):.3f}s)", flush=True)
-            print(f"- **Thermally-gated speedup (GPU/ANE): {gpu_med / ane_med:.3f}x median ({gpu_mean / ane_mean:.3f}x mean)**\n", flush=True)
+            print(
+                f"- GPU: {gpu_med:.3f}s median ({gpu_mean:.3f}s mean, "
+                f"stdev={np.std(round_times['GPU']):.3f}s)",
+                flush=True,
+            )
+            print(
+                f"- ANE: {ane_med:.3f}s median ({ane_mean:.3f}s mean, "
+                f"stdev={np.std(round_times['ANE']):.3f}s)",
+                flush=True,
+            )
+            print(
+                f"- **Thermally-gated speedup (GPU/ANE): {gpu_med / ane_med:.3f}x median "
+                f"({gpu_mean / ane_mean:.3f}x mean)**\n",
+                flush=True,
+            )
 
             print("| Stem | SNR (dB) | Peak Absolute Error |", flush=True)
             print("|:---|---:|---:|", flush=True)

@@ -32,6 +32,7 @@ capture = Capture(original)
 model.crosstransformer = capture
 mx.eval(model(data))
 model.crosstransformer = original
+assert capture.inputs is not None, "the cross-transformer was not called"
 x, xt = capture.inputs
 mx.eval(x, xt)
 

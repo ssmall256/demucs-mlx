@@ -2,10 +2,13 @@
 on s_side immediately following tdecoder of the current batch.
 """
 import time
-import numpy as np
+
 import mlx.core as mx
+import numpy as np
+
 from demucs_mlx.api import Separator
 from demucs_mlx.mlx_htdemucs import center_trim
+
 
 def main():
     print("=" * 70)
@@ -181,7 +184,10 @@ def main():
     speedup = med_serial / med_pipe
     print("\n" + "=" * 70)
     print(f"Serial (Batch 0 + Batch 1):    {med_serial:6.2f} ms")
-    print(f"Pipelined (Batch 0 + Batch 1): {med_pipe:6.2f} ms ({speedup:.2f}x, saves {diff_ms:.2f} ms)")
+    print(
+        f"Pipelined (Batch 0 + Batch 1): {med_pipe:6.2f} ms ({speedup:.2f}x, saves "
+        f"{diff_ms:.2f} ms)"
+    )
     print("=" * 70)
 
 if __name__ == "__main__":

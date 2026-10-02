@@ -38,6 +38,7 @@ rng = np.random.default_rng(481)
 segment = mx.array(rng.standard_normal((2, 2, 343_980), dtype=np.float32) * 0.1)
 mx.eval(model(segment))
 model.crosstransformer = transformer
+assert capture.inputs is not None, "the cross-transformer was not called"
 x, xt = capture.inputs
 mx.eval(x, xt)
 
