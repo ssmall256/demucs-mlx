@@ -1,6 +1,7 @@
 """Runtime hardware topology detection and auto-tuning for Apple Silicon."""
 from __future__ import annotations
 
+import ctypes
 import functools
 import os
 import platform
@@ -35,7 +36,32 @@ class AppleSiliconTopology:
         )
 
 
+def _sysctlbyname(key: str) -> Optional[str]:
+    """Read a sysctl in-process (microseconds, where `sysctl -n` costs a few ms)."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        size = ctypes.c_size_t(0)
+        name = key.encode()
+        if libc.sysctlbyname(name, None, ctypes.byref(size), None, 0) != 0 or not size.value:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if libc.sysctlbyname(name, buf, ctypes.byref(size), None, 0) != 0:
+            return None
+        raw = buf.raw[: size.value]
+        if key in _SYSCTL_INTEGERS:
+            return str(int.from_bytes(raw, sys.byteorder))
+        return raw.rstrip(b"\0").decode()
+    except Exception:
+        return None
+
+
+_SYSCTL_INTEGERS = {"hw.ncpu", "hw.memsize"}
+
+
 def _get_sysctl(key: str) -> Optional[str]:
+    value = _sysctlbyname(key)
+    if value is not None:
+        return value
     try:
         res = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, check=False)
         if res.returncode == 0:
@@ -45,8 +71,53 @@ def _get_sysctl(key: str) -> Optional[str]:
     return None
 
 
+def _iokit_gpu_core_count() -> Optional[int]:
+    """`gpu-core-count` of the IOAccelerator service, read in-process via IOKit."""
+    try:
+        iokit = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/IOKit.framework/IOKit")
+        cf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+        iokit.IOServiceMatching.restype = ctypes.c_void_p
+        iokit.IOServiceMatching.argtypes = [ctypes.c_char_p]
+        iokit.IOServiceGetMatchingService.restype = ctypes.c_uint32
+        iokit.IOServiceGetMatchingService.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        iokit.IORegistryEntryCreateCFProperty.restype = ctypes.c_void_p
+        iokit.IORegistryEntryCreateCFProperty.argtypes = [
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
+        ]
+        iokit.IOObjectRelease.argtypes = [ctypes.c_uint32]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFNumberGetValue.restype = ctypes.c_bool
+        cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+        # The matching dictionary is consumed by IOServiceGetMatchingService.
+        service = iokit.IOServiceGetMatchingService(0, iokit.IOServiceMatching(b"IOAccelerator"))
+        if not service:
+            return None
+        try:
+            key = cf.CFStringCreateWithCString(None, b"gpu-core-count", 0x08000100)  # UTF-8
+            prop = iokit.IORegistryEntryCreateCFProperty(service, key, None, 0)
+            cf.CFRelease(key)
+            if not prop:
+                return None
+            value = ctypes.c_int64(0)
+            ok = cf.CFNumberGetValue(prop, 4, ctypes.byref(value))  # kCFNumberSInt64Type
+            cf.CFRelease(prop)
+            return int(value.value) if ok and value.value > 0 else None
+        finally:
+            iokit.IOObjectRelease(service)
+    except Exception:
+        return None
+
+
 def _detect_gpu_cores(chip_name: str) -> int:
     """Detect GPU core count via IORegistry IOAccelerator service."""
+    cores = _iokit_gpu_core_count()
+    if cores:
+        return cores
     try:
         res = subprocess.run(
             ["ioreg", "-r", "-c", "IOAccelerator"],

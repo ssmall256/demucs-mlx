@@ -210,7 +210,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BATCH_SIZE,
         help="Batch size for inference (default: 'auto' based on hardware topology)",
     )
-    parser.add_argument("--write-workers", type=int, default=2,
+    parser.add_argument("--write-workers", type=int, default=4,
                         help="Number of concurrent audio writer threads")
     parser.add_argument("--prefetch-tracks", type=int, default=2,
                         help="Number of prefetched decoded tracks")

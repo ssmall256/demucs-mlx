@@ -64,7 +64,7 @@ Options:
 -b, --batch-size    Batch size (default: auto, matched to hardware topology)
 --compile           Opt in to whole-forward compilation for fixed shapes
 --attention         Attention kernel precision: fp16 (default) or fp32 (~3% slower, same accuracy)
---write-workers     Concurrent writer threads (default: 2)
+--write-workers     Concurrent writer threads (default: 4)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
 --list-models       List available models
@@ -110,7 +110,7 @@ discoverable rather than buried in source.
 | `--compile` | `None` (off) | Compiles repeated forward graph execution blocks for fixed chunk shapes. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
-| `--write-workers` | `2` | Encodes stems concurrently while the next track runs. |
+| `--write-workers` | `4` | Encodes stems concurrently while the next track runs. FLAC encoding scales with workers: 4 stems of a 3:15 track take 0.62 s at 4 against 1.22 s at 2 (M4 Max). |
 
 ### Environment variables
 

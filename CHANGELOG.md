@@ -16,6 +16,13 @@ and the README after the fact.
   15% faster. Output is unchanged.
 - The `[tool.uv.extra-build-dependencies]` `match-runtime` entry for
   `mlx-audio-io` is gone; nothing needs to be built against MLX any more.
+- `--write-workers` defaults to 4 (was 2). FLAC encoding scales with writers:
+  four stems of a 3:15 track take 0.62 s at 4 against 1.22 s at 2 (M4 Max);
+  WAV is unaffected.
+- Hardware detection for the auto batch size reads sysctl and the GPU core
+  count in-process (sysctlbyname, IOKit) instead of spawning `sysctl` three
+  times and `ioreg` once: 0.2 ms instead of 21-26 ms per run, with identical
+  results on M4 Pro, 32-core and 40-core M4 Max.
 
 ## 1.5.2 - 2026-10-02
 
