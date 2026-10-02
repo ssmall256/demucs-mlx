@@ -356,7 +356,7 @@ requires-dist = [
     { name = "demucs", marker = "extra == 'ane-convert'", specifier = ">=4.0" },
     { name = "demucs", marker = "extra == 'convert'", specifier = ">=4.0" },
     { name = "mlx", specifier = ">=0.32.3,<0.33" },
-    { name = "mlx-audio-io", specifier = ">=1.3.22,<1.4" },
+    { name = "mlx-audio-io", specifier = ">=1.3.23,<1.4" },
     { name = "mlx-spectro", specifier = ">=0.9.10" },
     { name = "numpy" },
     { name = "packaging" },
@@ -795,13 +795,13 @@ cpu = [
 
 [[package]]
 name = "mlx-audio-io"
-version = "1.3.22"
+version = "1.3.23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
     { name = "mlx", extra = ["cpu"], marker = "sys_platform == 'linux' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/ae/65fc556cdd3470f799f05e736dd893d5786932855a5f06b7c7cb74cc3784/mlx_audio_io-1.3.22.tar.gz", hash = "sha256:2d3f10783bfbc67ba065f9d4e5df4712d7c1783c3e68bda8091b12caff6169f3", size = 363111, upload-time = "2026-10-02T15:03:05.011Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/57/a0777a6e74b4c927a34b8056f091f6283d71140edf348c7b9f1d61e6775a/mlx_audio_io-1.3.23.tar.gz", hash = "sha256:4bf44906c8ceb9737404f280432cb966f4aa9fff4f799da99360c1b8f859f6b6", size = 361354, upload-time = "2026-10-02T20:15:41.23Z" }
 
 [[package]]
 name = "mlx-cpu"
