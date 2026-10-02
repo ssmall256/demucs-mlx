@@ -9,13 +9,13 @@ def test_fit_batch_size_small():
     assert fit_batch_size(8, 8) == 8
 
 
-def test_fit_batch_size_exact_divisors():
-    # When exact divisors exist, pick the exact divisor to eliminate tail remainder
+def test_fit_batch_size_even_split():
+    # Keep the batch count the target implies and spread chunks evenly
     assert fit_batch_size(21, 8) == 7  # 21 = 7 * 3 (120s benchmark!)
     assert fit_batch_size(14, 8) == 7  # 14 = 7 * 2
     assert fit_batch_size(16, 8) == 8  # 16 = 8 * 2
     assert fit_batch_size(24, 8) == 8  # 24 = 8 * 3
-    assert fit_batch_size(30, 8) == 6  # 30 = 6 * 5
+    assert fit_batch_size(30, 8) == 8  # 4 batches either way; 6 would need 5
 
 
 def test_fit_batch_size_near_divisors():
@@ -31,3 +31,14 @@ def test_fit_batch_size_pro_topology():
     assert fit_batch_size(6, 4) == 3  # 6 = 3 * 2
     assert fit_batch_size(9, 4) == 3  # 9 = 3 * 3
     assert fit_batch_size(12, 4) == 4  # 12 = 4 * 3
+
+
+def test_fit_batch_size_never_adds_batches():
+    # 38 chunks at target 4: ten batches. The old divisor search chose 2 (19 batches).
+    for chunks in range(1, 200):
+        for target in (2, 3, 4, 6, 8):
+            b = fit_batch_size(chunks, target)
+            assert 1 <= b <= target
+            assert -(-chunks // b) == -(-chunks // target)
+    assert fit_batch_size(38, 4) == 4
+    assert fit_batch_size(38, 3) == 3
