@@ -10,11 +10,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from .audio import AsyncAudioWriter as _AsyncWriter
 from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_registry import MLX_MODEL_REGISTRY
 
-
-from .audio import AsyncAudioWriter as _AsyncWriter
 
 def _list_models() -> int:
     for name in sorted(MLX_MODEL_REGISTRY.keys()):
@@ -217,6 +216,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Number of prefetched decoded tracks")
     parser.add_argument("--no-split", action="store_true", help="Disable chunked inference")
     parser.add_argument(
+        "--attention",
+        choices=["fp32", "fp16"],
+        default=None,
+        help=(
+            "Transformer attention precision: fp32 (default; matches upstream Demucs to "
+            "81-87 dB) or fp16 (~4%% faster, 72-79 dB). DEMUCS_MLX_ATTENTION_FP16=1 also "
+            "selects fp16."
+        ),
+    )
+    parser.add_argument(
         "--ane-time-encoder", action="store_true",
         help="run the first HTDemucs waveform convolution on the Neural Engine",
     )
@@ -224,7 +233,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--compile",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Compile repeated forward graph chunks (also controlled by DEMUCS_MLX_COMPILE_FORWARD=1)",
+        help=(
+            "Compile repeated forward graph chunks "
+            "(also controlled by DEMUCS_MLX_COMPILE_FORWARD=1)"
+        ),
     )
     parser.add_argument(
         "--auto-tune",
@@ -283,6 +295,12 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
     model = get_mlx_model(args.name)
     if hasattr(model, "eval"):
         model.eval()
+    from .mlx_transformer import resolve_attention_dtype, set_attention_dtype
+
+    attention_dtype = resolve_attention_dtype(args.attention)
+    for sub in getattr(model, "models", [model]):
+        if hasattr(sub, "named_modules"):
+            set_attention_dtype(sub, attention_dtype)
     if args.stem is not None and args.stem not in model.sources:
         raise SystemExit(f"Unknown stem {args.stem!r}; available: {', '.join(model.sources)}")
     ane_worker = None

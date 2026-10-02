@@ -5,7 +5,6 @@ import typing as tp
 from pathlib import Path
 
 import mlx.core as mx
-import numpy as np
 
 from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_registry import MLX_MODEL_REGISTRY
@@ -30,6 +29,7 @@ class Separator:
         stem: tp.Optional[str] = None,
         compile: tp.Optional[bool] = None,
         auto_tune: bool = False,
+        attention_precision: tp.Optional[str] = None,
     ):
         if model not in MLX_MODEL_REGISTRY:
             known = ", ".join(sorted(MLX_MODEL_REGISTRY.keys()))
@@ -91,9 +91,15 @@ class Separator:
         self._model = get_mlx_model(model)
         if hasattr(self._model, "eval"):
             self._model.eval()
+        # 'fp32' (default) or 'fp16' attention; see mlx_transformer.FastMultiHeadAttention.
+        from .mlx_transformer import resolve_attention_dtype, set_attention_dtype
+
+        attention_dtype = resolve_attention_dtype(attention_precision)
         for sub in getattr(self._model, "models", [self._model]):
             if hasattr(sub, "eval"):
                 sub.eval()
+            if hasattr(sub, "named_modules"):
+                set_attention_dtype(sub, attention_dtype)
             ct = getattr(sub, "crosstransformer", None)
             if ct is not None:
                 for layer in getattr(ct, "layers", []) + getattr(ct, "layers_t", []):
@@ -101,6 +107,12 @@ class Separator:
                         m = getattr(layer, a, None)
                         if m is not None and hasattr(m, "_ensure_fused"):
                             m._ensure_fused()
+            # Materialize the weights on this thread. MLX evaluates lazily on the
+            # stream of the thread that built the graph, so a model loaded here
+            # and first run on another thread would otherwise fail with "There is
+            # no Stream(...) in current thread".
+            if hasattr(sub, "parameters"):
+                mx.eval(sub.parameters())
         if stem is not None and stem not in self._model.sources:
             raise ValueError(f"Unknown stem {stem!r}; available: {', '.join(self._model.sources)}")
         self.stem = stem
@@ -179,25 +191,6 @@ class Separator:
         if compile is not None:
             self.compile = bool(compile)
 
-    def _prepare_wav(self, wav):  # -> np.ndarray
-        import numpy as np
-
-        wav_np = np.asarray(wav)
-        if wav_np.ndim != 2:
-            raise ValueError("Expected wav with shape (channels, time).")
-        if wav_np.shape[0] != self.audio_channels:
-            if self.audio_channels == 1:
-                wav_np = wav_np.mean(axis=0, keepdims=True)
-            elif wav_np.shape[0] == 1 and self.audio_channels > 1:
-                wav_np = np.tile(wav_np, (self.audio_channels, 1))
-            elif wav_np.shape[0] > self.audio_channels:
-                wav_np = wav_np[:self.audio_channels, :]
-            else:
-                raise ValueError(
-                    f"Audio has {wav_np.shape[0]} channels but model expects {self.audio_channels}."
-                )
-        return wav_np
-
     def _prepare_wav_mx(self, wav):
         import mlx.core as mx
 
@@ -226,17 +219,14 @@ class Separator:
         if self._ane_requested and self._closed:
             raise RuntimeError("ANE Separator is closed")
         import mlx.core as mx
-        import numpy as np
 
         from .apply_mlx import apply_model
 
-        if isinstance(wav, mx.array):
-            wav_mx = self._prepare_wav_mx(wav)
-            mix = wav_mx[None, ...]
-        else:
-            wav_np = self._prepare_wav(wav)
-            wav_mx = mx.array(wav_np)
-            mix = wav_mx[None, ...]
+        if not isinstance(wav, mx.array):
+            # Any DLPack or buffer-protocol array is imported without a copy.
+            wav = mx.asarray(wav)
+        wav_mx = self._prepare_wav_mx(wav)
+        mix = wav_mx[None, ...]
         estimates = apply_model(
             self._model,
             mix,
@@ -256,6 +246,9 @@ class Separator:
         if return_mx:
             stems = {name: stems_mx[idx] for idx, name in enumerate(names)}
             return wav_mx, stems
+        # NumPy output is this API's default for non-MLX callers.
+        import numpy as np
+
         wav_np = np.asarray(wav_mx)
         stems_np = np.asarray(stems_mx)
         stems = {name: stems_np[idx] for idx, name in enumerate(names)}
@@ -287,11 +280,13 @@ class Separator:
         """Unified separation entry point accepting file path or in-memory audio tensor.
 
         Args:
-            audio_or_path: Path to audio file or in-memory tensor (mx.array / np.ndarray).
+            audio_or_path: Path to audio file or in-memory tensor (mx.array or any
+                DLPack/buffer-protocol array).
             output_dir: Optional destination directory to persist separated stems.
             return_mx: If True and output_dir is None, return MLX arrays instead of NumPy.
             async_write: If True and output_dir is provided, write stems asynchronously.
-            filename_format: Format string for saved stems, e.g. "{stem}.wav" or "{track}_{stem}.wav".
+            filename_format: Format string for saved stems, e.g. "{stem}.wav" or
+                "{track}_{stem}.wav".
             clip: Clipping mode ("rescale", "clamp", "tanh", "none").
             bits_per_sample: Bit depth for saved audio (16, 24, 32).
             as_float: Save as float32 audio.
@@ -302,12 +297,13 @@ class Separator:
         """
         from .audio import AsyncAudioWriter, save_audio
 
+        want_mx = return_mx or (output_dir is not None)
         if isinstance(audio_or_path, (str, Path)):
             track_name = Path(audio_or_path).stem
-            wav, stems = self.separate_audio_file(audio_or_path, return_mx=return_mx or (output_dir is not None))
+            wav, stems = self.separate_audio_file(audio_or_path, return_mx=want_mx)
         else:
             track_name = "track"
-            wav, stems = self.separate_tensor(audio_or_path, return_mx=return_mx or (output_dir is not None))
+            wav, stems = self.separate_tensor(audio_or_path, return_mx=want_mx)
 
         if output_dir is None:
             return wav, stems

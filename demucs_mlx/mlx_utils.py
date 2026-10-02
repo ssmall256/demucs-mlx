@@ -4,6 +4,7 @@ import contextlib
 import contextvars
 import math
 import os
+import threading
 import typing as tp
 
 import mlx.core as mx
@@ -106,3 +107,24 @@ def unfold(x: mx.array, kernel_size: int, stride: int) -> mx.array:
         shape=[*shape, n_frames, kernel_size],
         strides=new_strides,
     )
+
+
+_THREAD_STREAMS = threading.local()
+
+
+def thread_side_stream() -> mx.Stream:
+    """A secondary stream on the default device for the calling thread.
+
+    MLX streams belong to the thread that created them, so a stream stored on a
+    model fails ("There is no Stream(gpu, N) in current thread") as soon as the
+    model is used from another thread. Keep one per thread instead.
+    """
+    device = mx.default_device()
+    streams = getattr(_THREAD_STREAMS, "streams", None)
+    if streams is None:
+        streams = _THREAD_STREAMS.streams = {}
+    key = str(device)
+    stream = streams.get(key)
+    if stream is None:
+        stream = streams[key] = mx.new_stream(device)
+    return stream
