@@ -220,9 +220,9 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["fp32", "fp16"],
         default=None,
         help=(
-            "Transformer attention precision: fp32 (default; matches upstream Demucs to "
-            "81-87 dB) or fp16 (~4%% faster, 72-79 dB). DEMUCS_MLX_ATTENTION_FP16=1 also "
-            "selects fp16."
+            "Attention kernel precision: fp16 (default; projections stay fp32, ~3%% "
+            "faster than fp32 and within 0.5 dB of it against upstream) or fp32. "
+            "DEMUCS_MLX_ATTENTION_FP16=0 also selects fp32."
         ),
     )
     parser.add_argument(

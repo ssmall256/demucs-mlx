@@ -110,12 +110,13 @@ _ATTENTION_DTYPES = {"fp32": mx.float32, "fp16": mx.float16}
 
 
 def _default_attention_dtype() -> mx.Dtype:
+    """float16 attention kernel unless DEMUCS_MLX_ATTENTION_FP16=0 asks for float32."""
     raw = os.getenv("DEMUCS_MLX_ATTENTION_FP16", "").strip().lower()
-    return mx.float16 if raw in {"1", "true", "yes", "on"} else mx.float32
+    return mx.float32 if raw in {"0", "false", "no", "off"} else mx.float16
 
 
 def resolve_attention_dtype(precision: tp.Optional[str]) -> mx.Dtype:
-    """'fp32', 'fp16', or None for the default (fp32 unless DEMUCS_MLX_ATTENTION_FP16=1)."""
+    """'fp32', 'fp16', or None for the default (fp16 unless DEMUCS_MLX_ATTENTION_FP16=0)."""
     if precision is None:
         return _default_attention_dtype()
     try:
@@ -139,83 +140,66 @@ def set_attention_dtype(model: nn.Module, dtype: mx.Dtype) -> None:
 class FastMultiHeadAttention(nn.MultiHeadAttention):
     """Multi-head attention with fused QKV projections and fast SDPA.
 
-    Computes in float32 by default, which matches upstream Demucs to 81-87 dB
-    SNR. float16 (``set_attention_dtype`` or DEMUCS_MLX_ATTENTION_FP16=1) is
-    about 4% faster end to end on htdemucs and matches to 72-79 dB.
+    The projections always run in float32: rounding them to float16 is where
+    the old float16 path lost its accuracy (72-79 dB against upstream instead
+    of 81-87). Only the attention kernel takes the compute dtype, float16 by
+    default: about 3% faster end to end on htdemucs than float32 and within
+    0.5 dB of it against upstream. ``set_attention_dtype(model, mx.float32)``
+    or DEMUCS_MLX_ATTENTION_FP16=0 selects float32.
     """
-
-    _CAST_NAMES = ("query_proj_c", "key_proj_c", "value_proj_c", "out_proj_c")
 
     def __init__(self, dims: int, num_heads: int, bias: bool = True):
         super().__init__(dims, num_heads, bias=bias)
         self.compute_dtype: tp.Optional[mx.Dtype] = None
-        self._fused_dtype: tp.Optional[mx.Dtype] = None
+        self._fused = False
 
     def set_compute_dtype(self, dtype: tp.Optional[mx.Dtype]) -> None:
         self.compute_dtype = dtype
-        self._fused_dtype = None
 
     @staticmethod
-    def _linear(layers, dtype) -> nn.Linear:
-        weight = mx.concatenate([layer.weight for layer in layers], axis=0).astype(dtype)
-        bias = mx.concatenate([layer.bias for layer in layers], axis=0).astype(dtype)
+    def _linear(layers) -> nn.Linear:
+        weight = mx.concatenate([layer.weight for layer in layers], axis=0)
+        bias = mx.concatenate([layer.bias for layer in layers], axis=0)
         fused = nn.Linear(weight.shape[1], weight.shape[0])
         fused.weight = weight
         fused.bias = bias
         return fused
 
     def _ensure_fused(self):
-        dtype = self.compute_dtype
-        if dtype is None:
-            dtype = _default_attention_dtype()
-        if self._fused_dtype is not None and self._fused_dtype == dtype:
+        if self._fused:
             return
-        q, k, v, o = self.query_proj, self.key_proj, self.value_proj, self.out_proj
-        self.qkv_proj = self._linear((q, k, v), dtype)
-        self.kv_proj = self._linear((k, v), dtype)
-        for name in self._CAST_NAMES:
-            if name in self:
-                del self[name]
-        if dtype != mx.float32:
-            # float32 reuses the loaded projections; other dtypes need casts.
-            for name, layer in zip(self._CAST_NAMES, (q, k, v, o)):
-                setattr(self, name, self._linear((layer,), dtype))
-        self._fused_dtype = dtype
-
-    def _projection(self, name: str) -> nn.Linear:
-        if self._fused_dtype == mx.float32:
-            return getattr(self, f"{name}_proj")
-        return getattr(self, f"{name}_proj_c")
+        q, k, v = self.query_proj, self.key_proj, self.value_proj
+        self.qkv_proj = self._linear((q, k, v))
+        self.kv_proj = self._linear((k, v))
+        self._fused = True
 
     def __call__(self, queries: mx.array, keys: mx.array, values: mx.array, mask=None) -> mx.array:
         self._ensure_fused()
-        dtype = self._fused_dtype
+        dtype = self.compute_dtype if self.compute_dtype is not None else _default_attention_dtype()
         heads = self.num_heads
-        orig_dtype = queries.dtype
-        queries_c = queries.astype(dtype)
 
         if queries is keys and keys is values:
-            qkv = self.qkv_proj(queries_c)
+            qkv = self.qkv_proj(queries)
             C = queries.shape[-1]
             q, k, v = mx.split(qkv, [C, 2 * C], axis=-1)
         elif keys is values:
-            q = self._projection("query")(queries_c)
-            kv = self.kv_proj(keys.astype(dtype))
+            q = self.query_proj(queries)
+            kv = self.kv_proj(keys)
             C = keys.shape[-1]
             k, v = mx.split(kv, [C], axis=-1)
         else:
-            q = self._projection("query")(queries_c)
-            k = self._projection("key")(keys.astype(dtype))
-            v = self._projection("value")(values.astype(dtype))
+            q = self.query_proj(queries)
+            k = self.key_proj(keys)
+            v = self.value_proj(values)
 
-        q = mx.unflatten(q, -1, (heads, -1)).transpose(0, 2, 1, 3)
-        k = mx.unflatten(k, -1, (heads, -1)).transpose(0, 2, 1, 3)
-        v = mx.unflatten(v, -1, (heads, -1)).transpose(0, 2, 1, 3)
+        q, k, v = (
+            mx.unflatten(t, -1, (heads, -1)).transpose(0, 2, 1, 3).astype(dtype)
+            for t in (q, k, v)
+        )
         scale = math.sqrt(1 / q.shape[-1])
         output = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask)
-        output = output.transpose(0, 2, 1, 3).flatten(-2, -1)
-        res = self._projection("out")(output)
-        return res.astype(orig_dtype)
+        output = output.astype(queries.dtype).transpose(0, 2, 1, 3).flatten(-2, -1)
+        return self.out_proj(output)
 
 
 class TransformerEncoderLayer(nn.Module):

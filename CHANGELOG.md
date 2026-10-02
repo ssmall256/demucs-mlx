@@ -51,10 +51,14 @@ at the 16-bit quantization floor on every stem. A new suite
 
 ### Changed
 
-- Transformer attention runs in **float32 by default**. float16, the 1.5.x
-  behavior, is ~4% faster end to end and matches upstream at 72–79 dB rather
-  than 81–87 dB; opt in with `--attention fp16`,
-  `Separator(attention_precision="fp16")` or `DEMUCS_MLX_ATTENTION_FP16=1`.
+- float16 attention keeps float32 accuracy: only the attention kernel runs in
+  half precision, and the projections stay float32. The 1.5.x path also
+  rounded the projections, which is where it lost accuracy (72–79 dB against
+  upstream instead of 81–87). The kernel alone matches upstream within 0.5 dB
+  of float32 and keeps most of the speed: ~3% faster end to end than float32,
+  against ~4% for the 1.5.x path. It stays the default; `--attention fp32`,
+  `Separator(attention_precision="fp32")` or `DEMUCS_MLX_ATTENTION_FP16=0`
+  select float32.
 - Overlap-add is streamed: each output span is finalized as soon as no later
   chunk can reach it, with the same fused kernel and summation order
   (bit-identical output). Peak memory on a 21.7-minute track fell from 9.75 GB to

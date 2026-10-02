@@ -63,7 +63,7 @@ Options:
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: auto, matched to hardware topology)
 --compile           Opt in to whole-forward compilation for fixed shapes
---attention         Transformer attention precision: fp32 (default) or fp16 (~4% faster)
+--attention         Attention kernel precision: fp16 (default) or fp32 (~3% slower, same accuracy)
 --write-workers     Concurrent writer threads (default: 2)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
@@ -106,7 +106,7 @@ discoverable rather than buried in source.
 | Setting | Default | Why |
 |---|---|---|
 | `-b` / `--batch-size` | `auto` | Measured per machine: 3 on M4 Pro and 32-core M4 Max, 8 on 40-core M4 Max with >= 64 GB, 2 elsewhere. Chunks are spread evenly over the batches the target implies. |
-| `--attention` | `fp32` | Matches upstream at 81–87 dB per stem. `fp16` is ~4% faster end to end and matches at 72–79 dB. |
+| `--attention` | `fp16` | Runs only the attention kernel in half precision; the projections stay fp32. Within 0.5 dB of `fp32` against upstream and ~3% faster end to end. `DEMUCS_MLX_ATTENTION_FP16=0` also selects `fp32`. |
 | `--compile` | `None` (off) | Compiles repeated forward graph execution blocks for fixed chunk shapes. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
