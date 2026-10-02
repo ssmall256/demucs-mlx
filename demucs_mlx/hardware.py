@@ -28,8 +28,10 @@ class AppleSiliconTopology:
     def summary(self) -> str:
         return (
             f"{self.chip_name} ({self.gpu_cores} GPU cores, {self.cpu_cores} CPU cores, "
-            f"{self.ram_gb:.1f} GB unified RAM, ~{self.estimated_bandwidth_gbps:.0f} GB/s bandwidth) -> "
-            f"optimal batch_size={self.optimal_batch_size}, stream_policy={self.recommended_stream_policy}"
+            f"{self.ram_gb:.1f} GB unified RAM, "
+            f"~{self.estimated_bandwidth_gbps:.0f} GB/s bandwidth) -> "
+            f"optimal batch_size={self.optimal_batch_size}, "
+            f"stream_policy={self.recommended_stream_policy}"
         )
 
 
@@ -148,21 +150,25 @@ def get_topology() -> AppleSiliconTopology:
     ram_gb = ram_bytes / (1024**3)
     bandwidth = _estimate_memory_bandwidth(brand, gpu_cores)
 
-    # Optimal batch size determination:
-    # - M4 Max 40-core with 128GB: batch size 8 achieves peak saturation (88.8x RTFx).
-    # - M4 Max 32-core / M4 Pro 20-core with 32-64GB: batch size 4 avoids allocator thrash and peaks at 74x / 49x.
-    # - Base M-series or <= 16GB RAM: batch size 2 balances memory and latency.
+    # Optimal batch size, from interleaved per-arm sweeps of htdemucs on a 216 s
+    # clip (batch 1, 2, 3, 4, 6, 8; one process per arm, alternating order):
+    # - M4 Pro 20-core / 64 GB (idle, +/-1%): batch 3 fastest, 1.5% ahead of 2;
+    #   4 ties 3 for 0.8 GB more; 6 and 8 are slower.
+    # - M4 Max 32-core / 36 GB (thermally limited laptop): best-of runs order
+    #   3 < 2 < 4 < 8 < 6 < 1; larger batches do not help.
+    # - M4 Max 40-core / 128 GB: 8 fastest by ~6% over 2, measured on a machine
+    #   under desktop load (directional, not an idle-machine figure).
+    # Smaller chips keep 2: no measurement, and the least memory.
     if gpu_cores >= 38 and ram_gb >= 64.0:
         opt_batch = 8
     elif gpu_cores >= 18 and ram_gb >= 32.0:
-        opt_batch = 4
-    elif gpu_cores >= 14 and ram_gb >= 16.0:
-        opt_batch = 2
+        opt_batch = 3
     else:
         opt_batch = 2
 
     # Stream policy determination:
-    # Chips with >= 16 GPU cores have sufficient execution units to overlap Time and Spectral branches
+    # Chips with >= 16 GPU cores have sufficient execution units to overlap the Time and
+    # Spectral branches
     # on independent Metal command queues without compute starvation.
     stream_policy = "dual_stream" if gpu_cores >= 16 else "single_stream"
     backend = "mlx_gpu"
@@ -191,26 +197,18 @@ def optimal_stream_policy() -> str:
 
 
 def fit_batch_size(num_chunks: int, target_b: int) -> int:
-    """Dynamically adjust auto batch size to minimize remainders and avoid padding.
+    """The batch size to run ``num_chunks`` chunks at for a target of ``target_b``.
 
-    Searches candidates in [max(2, target_b - 2), target_b] to find exact divisors
-    or maximize tail batch occupancy, eliminating redundant padding and multi-shape compiles.
+    Keeps the number of batches the target implies and spreads the chunks
+    evenly across them (21 chunks at 8 run as 7+7+7, not 8+8+5), so the tail is
+    as full as it can be without adding a batch. The 1.5 behavior preferred any
+    exact divisor, even one that added batches: whenever 2 divided the chunk
+    count, ``auto`` silently ran at batch 2, so it depended on track length
+    rather than on the machine.
     """
+    num_chunks = int(num_chunks)
+    target_b = max(1, int(target_b))
     if num_chunks <= target_b:
         return max(1, num_chunks)
-    min_b = max(2, target_b - 2)
-    # 1. Exact divisor search: prioritize highest divisor
-    for b in range(target_b, min_b - 1, -1):
-        if num_chunks % b == 0:
-            return b
-    # 2. Pick candidate that keeps total batch count minimal while maximizing tail batch size
-    best_b = target_b
-    min_batches = (num_chunks + target_b - 1) // target_b
-    best_rem = num_chunks % target_b
-    for b in range(target_b - 1, min_b - 1, -1):
-        batches = (num_chunks + b - 1) // b
-        rem = num_chunks % b
-        if batches == min_batches and rem > best_rem:
-            best_b = b
-            best_rem = rem
-    return best_b
+    batches = -(-num_chunks // target_b)
+    return -(-num_chunks // batches)
