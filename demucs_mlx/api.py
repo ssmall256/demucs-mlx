@@ -4,6 +4,7 @@ from __future__ import annotations
 import typing as tp
 from pathlib import Path
 
+import mlx.core as mx
 import numpy as np
 
 from .defaults import DEFAULT_BATCH_SIZE
@@ -312,6 +313,9 @@ class Separator:
         out_dir.mkdir(parents=True, exist_ok=True)
         saved_paths: dict[str, Path] = {}
 
+        if stems and isinstance(next(iter(stems.values())), mx.array):
+            mx.eval(*stems.values())
+
         if async_write:
             with AsyncAudioWriter(
                 clip=clip,
@@ -321,8 +325,7 @@ class Separator:
                 for stem_name, stem_wav in stems.items():
                     filename = filename_format.format(stem=stem_name, track=track_name)
                     dest = out_dir / filename
-                    stem_host = np.ascontiguousarray(np.asarray(stem_wav), dtype=np.float32)
-                    writer.submit(stem_host, dest, self.samplerate)
+                    writer.submit(stem_wav, dest, self.samplerate)
                     saved_paths[stem_name] = dest
         else:
             for stem_name, stem_wav in stems.items():
