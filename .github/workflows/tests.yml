@@ -94,3 +94,6 @@ jobs:
 
     - name: Run checkpoint and cache security regressions
       run: uv run python tests/test_demucs_security.py
+
+    - name: Run upstream parity regressions
+      run: uv run pytest -q tests/test_upstream_parity.py
