@@ -278,8 +278,9 @@ def apply_model(
 
         # --- BATCHING STATE ---
         if batch_size is None or str(batch_size).lower() == "auto":
-            from .hardware import optimal_batch_size
-            effective_batch_size = optimal_batch_size()
+            from .hardware import fit_batch_size, optimal_batch_size
+            target_b = optimal_batch_size()
+            effective_batch_size = fit_batch_size(len(offsets), target_b)
         else:
             effective_batch_size = int(batch_size)
             if effective_batch_size <= 0:

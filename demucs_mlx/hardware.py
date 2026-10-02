@@ -188,3 +188,29 @@ def optimal_batch_size() -> int:
 def optimal_stream_policy() -> str:
     """Return the auto-tuned optimal stream policy ('dual_stream' or 'single_stream')."""
     return get_topology().recommended_stream_policy
+
+
+def fit_batch_size(num_chunks: int, target_b: int) -> int:
+    """Dynamically adjust auto batch size to minimize remainders and avoid padding.
+
+    Searches candidates in [max(2, target_b - 2), target_b] to find exact divisors
+    or maximize tail batch occupancy, eliminating redundant padding and multi-shape compiles.
+    """
+    if num_chunks <= target_b:
+        return max(1, num_chunks)
+    min_b = max(2, target_b - 2)
+    # 1. Exact divisor search: prioritize highest divisor
+    for b in range(target_b, min_b - 1, -1):
+        if num_chunks % b == 0:
+            return b
+    # 2. Pick candidate that keeps total batch count minimal while maximizing tail batch size
+    best_b = target_b
+    min_batches = (num_chunks + target_b - 1) // target_b
+    best_rem = num_chunks % target_b
+    for b in range(target_b - 1, min_b - 1, -1):
+        batches = (num_chunks + b - 1) // b
+        rem = num_chunks % b
+        if batches == min_batches and rem > best_rem:
+            best_b = b
+            best_rem = rem
+    return best_b

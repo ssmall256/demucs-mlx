@@ -46,9 +46,12 @@ class Separator:
             raise ValueError("overlap must be in [0, 1).")
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
-        if auto_tune or batch_size is None or batch_size == "auto":
-            from .hardware import optimal_batch_size
-            effective_batch_size = optimal_batch_size()
+        if auto_tune or batch_size is None or str(batch_size).lower() == "auto":
+            if ane_time_encoder:
+                from .hardware import optimal_batch_size
+                effective_batch_size = optimal_batch_size()
+            else:
+                effective_batch_size = "auto"
         elif int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
         else:
