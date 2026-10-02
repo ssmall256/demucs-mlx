@@ -387,6 +387,9 @@ def apply_model(
                         progress_bar.update(actual_count)
 
                     mx.async_eval(batch_out)
+                    eval_flush_interval = int(os.getenv("DEMUCS_MLX_EVAL_FLUSH_INTERVAL", "8"))
+                    if eval_flush_interval > 0 and (b_idx + 1) % eval_flush_interval == 0:
+                        mx.eval(batch_out)
             finally:
                 if progress_bar is not None:
                     progress_bar.close()
