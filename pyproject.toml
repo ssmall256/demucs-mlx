@@ -53,6 +53,11 @@ demucs-mlx = "demucs_mlx.separate:main"
 [project.urls]
 Homepage = "https://github.com/ssmall256/demucs-mlx/"
 
+[tool.uv]
+# coremltools 9 needs torch < 2.8; resolve the Core ML converter separately so
+# the ordinary conversion extra keeps current PyTorch.
+conflicts = [[{ extra = "convert" }, { extra = "ane-convert" }]]
+
 [tool.uv.extra-build-dependencies]
 mlx-audio-io = [{ requirement = "mlx[cpu]", match-runtime = true }]
 
@@ -89,4 +94,4 @@ version = {attr = "demucs_mlx.__version__"}
 include = ["demucs_mlx*"]
 
 [tool.setuptools.package-data]
-demucs_mlx = ["remote/*.txt", "remote/*.yaml"]
+demucs_mlx = ["remote/*.txt", "remote/*.yaml", "csrc/*.m"]
