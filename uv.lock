@@ -234,9 +234,9 @@ requires-dist = [
     { name = "coremltools", marker = "sys_platform == 'darwin' and extra == 'ane-convert'", specifier = "==9.0" },
     { name = "demucs", marker = "extra == 'ane-convert'", specifier = ">=4.0" },
     { name = "demucs", marker = "extra == 'convert'", specifier = ">=4.0" },
-    { name = "mlx", specifier = ">=0.31.2,<0.33" },
-    { name = "mlx-audio-io", specifier = ">=1.3.20,<1.4" },
-    { name = "mlx-spectro", specifier = ">=0.9.3" },
+    { name = "mlx", specifier = ">=0.32.3,<0.33" },
+    { name = "mlx-audio-io", specifier = ">=1.3.21,<1.4" },
+    { name = "mlx-spectro", specifier = ">=0.9.8" },
     { name = "numpy" },
     { name = "packaging" },
     { name = "pyobjc-framework-coreml", marker = "sys_platform == 'darwin' and extra == 'ane'", specifier = ">=10" },
@@ -672,13 +672,13 @@ cpu = [
 
 [[package]]
 name = "mlx-audio-io"
-version = "1.3.20"
+version = "1.3.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mlx", extra = ["cpu"], marker = "sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/fe/aea483b979ef97bc51fe34ea7f11b743ddba65b80838b0cb7a1721468f18/mlx_audio_io-1.3.20.tar.gz", hash = "sha256:e293ff1b9a485f999e9f7c5ce5e4dec20c8a1fc0dc33592b2674f48ecbc9c024", size = 355348, upload-time = "2026-09-29T10:58:40.983Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/4c/61cde2f12d5f18924d7f38667a1acd256c2d168326aaabde397d378fc5f9/mlx_audio_io-1.3.21.tar.gz", hash = "sha256:534a95e01db2393c6f50f03832aac455e51980031dfc2ee937d5f0f7033a2cfe", size = 358360, upload-time = "2026-10-02T00:10:43.336Z" }
 
 [[package]]
 name = "mlx-cpu"
@@ -701,7 +701,7 @@ wheels = [
 
 [[package]]
 name = "mlx-spectro"
-version = "0.9.4"
+version = "0.9.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx" },
@@ -709,9 +709,9 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/6b/b7486925af49ea3698e17616a1789d3fd2a00036f9ea6ed2efe4d86c9806/mlx_spectro-0.9.4.tar.gz", hash = "sha256:89fb688c4ca413aac9c7c0ded506e1eb3a6151c65765ca8fe4b48ed494237035", size = 275728, upload-time = "2026-09-23T07:30:47.892Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/b8/62741224bebc6ad2200af6cca1c7ff21c6e5b3d332e18c180f4141b22d48/mlx_spectro-0.9.8.tar.gz", hash = "sha256:94240ad264861c8fdc6768928bcabbc17749dcc1e7619e8c5cd08a7315a7ba91", size = 284337, upload-time = "2026-10-02T00:08:16.71Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/30/04f977ae5ee9d5eb96d6b21bc8762a947d429d41dbfcac6abe1f9aed9d17/mlx_spectro-0.9.4-py3-none-any.whl", hash = "sha256:558d34baa751343dc68970d6ff53197929f2c2c08ea810e91b696b3e0714acbf", size = 79928, upload-time = "2026-09-23T07:30:46.292Z" },
+    { url = "https://files.pythonhosted.org/packages/83/89/e8522959bc81a515854a5d180675851f369ceb1a50956e47af9a861d6b2d/mlx_spectro-0.9.8-py3-none-any.whl", hash = "sha256:df56544b0ed17e6ece8ec6e29589b4829ef13beb7165c5362fb5be6490bd01fe", size = 84308, upload-time = "2026-10-02T00:08:15.266Z" },
 ]
 
 [[package]]
