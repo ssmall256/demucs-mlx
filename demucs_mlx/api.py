@@ -4,6 +4,8 @@ from __future__ import annotations
 import typing as tp
 from pathlib import Path
 
+import numpy as np
+
 from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_registry import MLX_MODEL_REGISTRY
 
@@ -265,6 +267,78 @@ class Separator:
 
         audio_mx, sr = load_audio(path, sr=self.samplerate, dtype="float32")
         return self.separate_tensor(audio_mx, return_mx=return_mx)
+
+    def separate(
+        self,
+        audio_or_path: tp.Union[str, Path, tp.Any],
+        *,
+        output_dir: tp.Optional[tp.Union[str, Path]] = None,
+        return_mx: bool = False,
+        async_write: bool = True,
+        filename_format: str = "{stem}.wav",
+        clip: tp.Literal["rescale", "clamp", "tanh", "none"] = "rescale",
+        bits_per_sample: tp.Literal[16, 24, 32] = 16,
+        as_float: bool = False,
+    ) -> tp.Union[tp.Tuple[tp.Any, tp.Dict[str, tp.Any]], tp.Dict[str, Path]]:
+        """Unified separation entry point accepting file path or in-memory audio tensor.
+
+        Args:
+            audio_or_path: Path to audio file or in-memory tensor (mx.array / np.ndarray).
+            output_dir: Optional destination directory to persist separated stems.
+            return_mx: If True and output_dir is None, return MLX arrays instead of NumPy.
+            async_write: If True and output_dir is provided, write stems asynchronously.
+            filename_format: Format string for saved stems, e.g. "{stem}.wav" or "{track}_{stem}.wav".
+            clip: Clipping mode ("rescale", "clamp", "tanh", "none").
+            bits_per_sample: Bit depth for saved audio (16, 24, 32).
+            as_float: Save as float32 audio.
+
+        Returns:
+            If output_dir is None: (mix, {stem_name: stem_audio})
+            If output_dir is provided: {stem_name: saved_path}
+        """
+        from .audio import AsyncAudioWriter, save_audio
+
+        if isinstance(audio_or_path, (str, Path)):
+            track_name = Path(audio_or_path).stem
+            wav, stems = self.separate_audio_file(audio_or_path, return_mx=return_mx or (output_dir is not None))
+        else:
+            track_name = "track"
+            wav, stems = self.separate_tensor(audio_or_path, return_mx=return_mx or (output_dir is not None))
+
+        if output_dir is None:
+            return wav, stems
+
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths: dict[str, Path] = {}
+
+        if async_write:
+            with AsyncAudioWriter(
+                clip=clip,
+                bits_per_sample=bits_per_sample,
+                as_float=as_float,
+            ) as writer:
+                for stem_name, stem_wav in stems.items():
+                    filename = filename_format.format(stem=stem_name, track=track_name)
+                    dest = out_dir / filename
+                    stem_host = np.ascontiguousarray(np.asarray(stem_wav), dtype=np.float32)
+                    writer.submit(stem_host, dest, self.samplerate)
+                    saved_paths[stem_name] = dest
+        else:
+            for stem_name, stem_wav in stems.items():
+                filename = filename_format.format(stem=stem_name, track=track_name)
+                dest = out_dir / filename
+                save_audio(
+                    stem_wav,
+                    dest,
+                    samplerate=self.samplerate,
+                    clip=clip,
+                    bits_per_sample=bits_per_sample,
+                    as_float=as_float,
+                )
+                saved_paths[stem_name] = dest
+
+        return saved_paths
 
 
 def save_audio(*args, **kwargs):

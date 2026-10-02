@@ -15,67 +15,7 @@ from .defaults import DEFAULT_BATCH_SIZE
 from .mlx_registry import MLX_MODEL_REGISTRY
 
 
-class _AsyncWriter:
-    def __init__(
-        self,
-        maxsize: int = 4,
-        workers: int = 2,
-        *,
-        clip: str = "rescale",
-        bits_per_sample: int = 16,
-        as_float: bool = False,
-    ):
-        if workers <= 0:
-            raise ValueError("workers must be > 0")
-        self._queue: "queue.Queue[tp.Optional[tuple]]" = queue.Queue(maxsize=maxsize)
-        self._error: tp.Optional[BaseException] = None
-        self._workers = int(workers)
-        self._clip = clip
-        self._bits_per_sample = int(bits_per_sample)
-        self._as_float = bool(as_float)
-        self._threads = [
-            threading.Thread(target=self._run, daemon=True, name=f"demucs-writer-{i}")
-            for i in range(self._workers)
-        ]
-        for thread in self._threads:
-            thread.start()
-
-    def _run(self) -> None:
-        from .audio import save_audio
-        while True:
-            item = self._queue.get()
-            try:
-                if item is None:
-                    self._queue.task_done()
-                    break
-                wav, path, samplerate = item
-                save_audio(
-                    wav,
-                    path,
-                    samplerate=samplerate,
-                    clip=self._clip,
-                    bits_per_sample=self._bits_per_sample,
-                    as_float=self._as_float,
-                )
-            except BaseException as exc:  # propagate after join
-                self._error = exc
-            finally:
-                if item is not None:
-                    self._queue.task_done()
-
-    def submit(self, wav: np.ndarray, path: Path, samplerate: int) -> None:
-        if self._error is not None:
-            raise self._error
-        self._queue.put((wav, path, samplerate))
-
-    def close(self) -> None:
-        for _ in range(self._workers):
-            self._queue.put(None)
-        self._queue.join()
-        for thread in self._threads:
-            thread.join()
-        if self._error is not None:
-            raise self._error
+from .audio import AsyncAudioWriter as _AsyncWriter
 
 def _list_models() -> int:
     for name in sorted(MLX_MODEL_REGISTRY.keys()):

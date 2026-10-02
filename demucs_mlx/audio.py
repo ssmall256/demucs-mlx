@@ -125,3 +125,77 @@ def save_audio(wav,
             mac.save(str(path), wav_np, samplerate, layout=save_layout, encoding=encoding, clip=False)
         else:
             raise TypeError(f"Unsupported audio type: {type(wav)}")
+
+
+class AsyncAudioWriter:
+    """Non-blocking background thread pool for audio file serialization."""
+
+    def __init__(
+        self,
+        maxsize: int = 4,
+        workers: int = 2,
+        *,
+        clip: tp.Literal["rescale", "clamp", "tanh", "none"] = "rescale",
+        bits_per_sample: tp.Literal[16, 24, 32] = 16,
+        as_float: bool = False,
+    ):
+        import queue
+        import threading
+
+        if workers <= 0:
+            raise ValueError("workers must be > 0")
+        self._queue: queue.Queue[tp.Optional[tuple]] = queue.Queue(maxsize=maxsize)
+        self._error: tp.Optional[BaseException] = None
+        self._workers = int(workers)
+        self._clip = clip
+        self._bits_per_sample = int(bits_per_sample)
+        self._as_float = bool(as_float)
+        self._threads = [
+            threading.Thread(target=self._run, daemon=True, name=f"demucs-writer-{i}")
+            for i in range(self._workers)
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    self._queue.task_done()
+                    break
+                wav, path, samplerate = item
+                save_audio(
+                    wav,
+                    path,
+                    samplerate=samplerate,
+                    clip=self._clip,
+                    bits_per_sample=self._bits_per_sample,
+                    as_float=self._as_float,
+                )
+            except BaseException as exc:
+                self._error = exc
+            finally:
+                if item is not None:
+                    self._queue.task_done()
+
+    def submit(self, wav: tp.Any, path: tp.Union[str, Path], samplerate: int) -> None:
+        if self._error is not None:
+            raise self._error
+        self._queue.put((wav, path, samplerate))
+
+    def close(self) -> None:
+        for _ in range(self._workers):
+            self._queue.put(None)
+        self._queue.join()
+        for thread in self._threads:
+            thread.join()
+        if self._error is not None:
+            raise self._error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
