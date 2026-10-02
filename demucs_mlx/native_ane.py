@@ -1,15 +1,21 @@
-"""Zero-GIL native Core ML dispatch bridge for Demucs on Apple Silicon."""
+"""Zero-GIL native Core ML dispatch bridge for Demucs on Apple Silicon.
+
+Buffers are MLX arrays handed to Core ML by address: MLX exposes its unified
+memory through the buffer protocol, so the bridge reads the input and writes
+the output in place with no copies and no NumPy.
+"""
 from __future__ import annotations
 
 import ctypes
-import os
 import platform
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
+import mlx.core as mx
+
+from .ane_paths import ane_cache_dir
 
 _LIB_HANDLE: Optional[ctypes.CDLL] = None
 _LIB_INITIALIZED_MODEL: Optional[str] = None
@@ -28,7 +34,7 @@ def get_native_ane_lib() -> Optional[ctypes.CDLL]:
     if not csrc_path.is_file():
         return None
 
-    cache_dir = Path.home() / ".cache" / "demucs-mlx" / "ane"
+    cache_dir = ane_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     dylib_path = cache_dir / "libdemucs_ane.dylib"
 
@@ -54,7 +60,7 @@ def get_native_ane_lib() -> Optional[ctypes.CDLL]:
                 str(dylib_path),
             ]
             subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except Exception as exc:
+        except Exception:
             # Fall back to PyObjC if clang compilation fails
             return None
 
@@ -75,14 +81,47 @@ def is_native_ane_available() -> bool:
     return get_native_ane_lib() is not None
 
 
+class MLXBuffer:
+    """The raw memory of an evaluated, row-contiguous MLX array.
+
+    Holds a buffer export for as long as it lives, so the address stays valid;
+    release it (``with`` or ``release()``) before the array is used again.
+    """
+
+    def __init__(self, array: mx.array, *, dtype: mx.Dtype):
+        if array.dtype != dtype:
+            raise TypeError(f"expected {dtype}, got {array.dtype}")
+        mx.eval(array)
+        self._view = memoryview(array)
+        if not self._view.c_contiguous:
+            self._view.release()
+            raise ValueError("array must be row-contiguous")
+        self._bytes = (ctypes.c_char * self._view.nbytes).from_buffer(self._view)
+        self.address = ctypes.addressof(self._bytes)
+
+    def release(self) -> None:
+        if self._bytes is not None:
+            self._bytes = None
+            self._view.release()
+
+    def __enter__(self) -> "MLXBuffer":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.release()
+
+
 def predict_waveform_conv_native(
     model_path: Path | str,
-    input_data: np.ndarray,
-    output_target: np.ndarray,
+    input_data: mx.array,
+    output_target: mx.array,
 ) -> bool:
     """
-    Execute waveform convolution on the Neural Engine via zero-GIL native dispatch.
-    Returns True if successful, False if fallback is required.
+    Run the waveform convolution on the Neural Engine via zero-GIL native dispatch.
+
+    ``input_data`` is float32 (N, 2, 343980); ``output_target`` is a float16
+    (N, 48, 85995) array that is written in place. Returns True on success,
+    False if the PyObjC fallback is required.
     """
     lib = get_native_ane_lib()
     if lib is None:
@@ -96,15 +135,13 @@ def predict_waveform_conv_native(
             return False
         _LIB_INITIALIZED_MODEL = path_str
 
-    if not input_data.flags.c_contiguous:
-        input_data = np.ascontiguousarray(input_data)
-    if not output_target.flags.c_contiguous:
-        output_target = np.ascontiguousarray(output_target)
-
     count = int(input_data.shape[0])
-    res = lib.predict_conv_batch(
-        ctypes.c_void_p(input_data.ctypes.data),
-        ctypes.c_void_p(output_target.ctypes.data),
-        ctypes.c_int(count),
-    )
+    with MLXBuffer(input_data, dtype=mx.float32) as src, MLXBuffer(
+        output_target, dtype=mx.float16
+    ) as dst:
+        res = lib.predict_conv_batch(
+            ctypes.c_void_p(src.address),
+            ctypes.c_void_p(dst.address),
+            ctypes.c_int(count),
+        )
     return res == 0
