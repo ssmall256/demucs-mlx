@@ -2,7 +2,6 @@ import typing as tp
 from pathlib import Path
 
 import mlx.core as mx
-import numpy as np
 
 
 def load_audio(path, *, sr: int, layout: str = "channels_first", dtype: str = "float32"):
@@ -48,25 +47,6 @@ def prevent_clip(wav, mode='rescale'):
     return wav
 
 
-def _prevent_clip_numpy(wav: np.ndarray, mode: str):
-    """Prevent clipping in numpy arrays."""
-    if mode is None or mode == 'none':
-        return wav
-    if not np.issubdtype(wav.dtype, np.floating):
-        raise AssertionError("too late for clipping")
-    if mode == 'rescale':
-        max_val = float(np.max(np.abs(wav)))
-        scale = max(1.01 * max_val, 1.0)
-        wav = wav / scale
-    elif mode == 'clamp':
-        wav = np.clip(wav, -0.99, 0.99)
-    elif mode == 'tanh':
-        wav = np.tanh(wav)
-    else:
-        raise ValueError(f"Invalid mode {mode}")
-    return wav
-
-
 def _prevent_clip_mlx(wav: mx.array, mode: str):
     """Prevent clipping using MLX ops (keeps data on GPU)."""
     if mode is None or mode == 'none':
@@ -93,39 +73,33 @@ def save_audio(wav,
                layout: str = "channels_first"):
     """
     Save audio file using mlx_audio_io.
-    Supports np.ndarray, mlx.core.array, and torch.Tensor.
+    Accepts an mlx.core.array, a torch.Tensor, or any DLPack/buffer-protocol
+    array; non-MLX input is imported without a copy.
     """
     import mlx_audio_io as mac
     path = Path(path)
 
     # Determine encoding
-    if as_float:
+    if as_float or bits_per_sample == 32:
         encoding = "float32"
+    elif bits_per_sample == 24:
+        encoding = "pcm24"
     else:
-        encoding = "pcm16" if bits_per_sample == 16 else "float32"
+        encoding = "pcm16"
 
-    save_layout = layout if getattr(wav, "ndim", 2) > 1 else "channels_last"
+    if not isinstance(wav, mx.array):
+        if type(wav).__module__.split(".")[0] == "torch":
+            wav = wav.detach().cpu()
+        wav = mx.asarray(wav)
+    if not mx.issubdtype(wav.dtype, mx.floating):
+        raise TypeError(f"Expected floating-point audio, got {wav.dtype}")
 
-    # --- MLX HANDLING (Optimized) ---
-    if isinstance(wav, mx.array):
-        wav_mx = _prevent_clip_mlx(wav, mode=clip)
-        mx.eval(wav_mx)
-        mac.save(str(path), wav_mx, samplerate, layout=save_layout, encoding=encoding, clip=(clip != 'none'))
-    # --- NUMPY HANDLING ---
-    elif isinstance(wav, np.ndarray):
-        wav_np = wav
-        if np.issubdtype(wav_np.dtype, np.floating):
-            wav_np = _prevent_clip_numpy(wav_np, mode=clip)
-        mac.save(str(path), wav_np, samplerate, layout=save_layout, encoding=encoding, clip=False)
-    # --- TORCH HANDLING (lazy import) ---
-    else:
-        import torch
-        if isinstance(wav, torch.Tensor):
-            wav = prevent_clip(wav, mode=clip)
-            wav_np = wav.detach().cpu().numpy()
-            mac.save(str(path), wav_np, samplerate, layout=save_layout, encoding=encoding, clip=False)
-        else:
-            raise TypeError(f"Unsupported audio type: {type(wav)}")
+    save_layout = layout if wav.ndim > 1 else "channels_last"
+    wav_mx = _prevent_clip_mlx(wav, mode=clip)
+    mx.eval(wav_mx)
+    mac.save(
+        str(path), wav_mx, samplerate, layout=save_layout, encoding=encoding, clip=(clip != 'none')
+    )
 
 
 class AsyncAudioWriter:
@@ -183,6 +157,8 @@ class AsyncAudioWriter:
     def submit(self, wav: tp.Any, path: tp.Union[str, Path], samplerate: int) -> None:
         if self._error is not None:
             raise self._error
+        # MLX streams belong to the thread that built the graph, so evaluate
+        # here; the writer thread only applies clipping and encodes.
         if isinstance(wav, mx.array):
             mx.eval(wav)
         self._queue.put((wav, path, samplerate))
