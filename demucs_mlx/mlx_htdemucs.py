@@ -442,38 +442,36 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 transfer_start = time.perf_counter()
                 ane_future = ane_conv.submit(mix)
                 ane_conv.transfer_seconds += time.perf_counter() - transfer_start
-        z = self._spec(mix)
-        mag = self._magnitude(z)
-        x = mag
-
-        B, C, Fq, T = x.shape
-        mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
-        std = mx.std(x, axis=(1, 2, 3), keepdims=True)
-        x = (x - mean) / (1e-5 + std)
-
         s_side = getattr(self, "_stream_side", None)
         if s_side is None:
             s_side = mx.new_stream(mx.default_device())
             self._stream_side = s_side
 
-        with mx.stream(s_side):
-            xt = mix
-            meant = mx.mean(xt, axis=(1, 2), keepdims=True)
-            stdt = mx.std(xt, axis=(1, 2), keepdims=True)
-            xt = (xt - meant) / (1e-5 + stdt)
-
         saved = []
         saved_t = []
         lengths = []
         lengths_t = []
+
         if precomputed_conv is not None:
             from .ane import LENGTH
 
             with mx.stream(s_side):
+                xt = mix
+                meant = mx.mean(xt, axis=(1, 2), keepdims=True)
+                stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+                xt = (xt - meant) / (1e-5 + stdt)
                 for time_idx, tenc in enumerate(self.tencoder):
                     lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
                     xt = tenc(xt, precomputed_conv=precomputed_conv) if time_idx == 0 else tenc(xt)
                     saved_t.append(xt)
+
+            z = self._spec(mix)
+            mag = self._magnitude(z)
+            x = mag
+            B, C, Fq, T = x.shape
+            mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
+            std = mx.std(x, axis=(1, 2, 3), keepdims=True)
+            x = (x - mean) / (1e-5 + std)
 
             for idx, encode in enumerate(self.encoder):
                 lengths.append(x.shape[-1])
@@ -484,16 +482,23 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     x = x + self.freq_emb_scale * emb
                 saved.append(x)
         elif ane_future is None:
-            s_side = getattr(self, "_stream_side", None)
-            if s_side is None:
-                s_side = mx.new_stream(mx.default_device())
-                self._stream_side = s_side
-
             with mx.stream(s_side):
+                xt = mix
+                meant = mx.mean(xt, axis=(1, 2), keepdims=True)
+                stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+                xt = (xt - meant) / (1e-5 + stdt)
                 for tenc in self.tencoder:
                     lengths_t.append(xt.shape[-1])
                     xt = tenc(xt)
                     saved_t.append(xt)
+
+            z = self._spec(mix)
+            mag = self._magnitude(z)
+            x = mag
+            B, C, Fq, T = x.shape
+            mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
+            std = mx.std(x, axis=(1, 2, 3), keepdims=True)
+            x = (x - mean) / (1e-5 + std)
 
             for idx, encode in enumerate(self.encoder):
                 lengths.append(x.shape[-1])
@@ -595,6 +600,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
 
         offset = self.depth - len(self.tdecoder)
         has_empty_tdec = any(t.empty for t in self.tdecoder)
+        S = len(self.sources)
         if not has_empty_tdec:
             # Dual-branch decoders: waveform and spectral decoders are independent skip consumers.
             s_side = getattr(self, "_stream_side", None)
@@ -607,6 +613,9 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     length_t = lengths_t.pop(-1)
                     skip_t = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip_t, length_t)
+                actual_length = xt.shape[-1]
+                xt = xt.reshape(B, S, -1, actual_length)
+                xt = xt * stdt[:, None] + meant[:, None]
 
             for idx, decode in enumerate(self.decoder):
                 skip = saved.pop(-1)
@@ -624,11 +633,14 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     else:
                         skip_t = saved_t.pop(-1)
                         xt, _ = tdec(xt, skip_t, length_t)
+            with mx.stream(s_side):
+                actual_length = xt.shape[-1]
+                xt = xt.reshape(B, S, -1, actual_length)
+                xt = xt * stdt[:, None] + meant[:, None]
 
         if len(saved) != 0 or len(lengths_t) != 0 or len(saved_t) != 0:
             raise RuntimeError("Skip connections not fully consumed")
 
-        S = len(self.sources)
         x = x.reshape(B, S, -1, Fq, T)
         x = x * std[:, None] + mean[:, None]
 
@@ -638,11 +650,6 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         else:
             x = self._ispec(zout, length)
 
-        # Reshape xt to match expected output shape
-        with mx.stream(s_side):
-            actual_length = xt.shape[-1]
-            xt = xt.reshape(B, S, -1, actual_length)
-            xt = xt * stdt[:, None] + meant[:, None]
         # Trim x to match xt length before adding
         x = center_trim(x, xt)
         x = xt + x

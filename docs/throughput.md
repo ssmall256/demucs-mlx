@@ -382,13 +382,14 @@ Instead of competing for DRAM bandwidth, CPU cores are orchestrated as the **Zer
 
 Evaluated under strict thermal gating (`nominal -> nominal` on every trial with 5s cooldown and memory pool cleanup):
 
-| Host | Architecture | Topology | Optimal Policy | Batch 4 (GPU / ANE) | Batch 8 (GPU / ANE) | Peak Throughput |
+| Host | Architecture | Topology | Optimal Policy | Batch 4 (GPU / ANE) | Batch 8 Baseline (GPU / ANE) | Peak Throughput (Post-Decoupling) |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|
-| **local** | M4 Max | 40 GPU, 16 CPU, 128 GB (546 GB/s) | Batch Auto (8), Decoupled Dual-Stream | 1.354s (88.6×) / 1.372s (87.5×) | **1.333s (90.0×)** / 1.350s (88.9×) | **94.8× RTFx (1.266s)** |
+| **local** | M4 Max | 40 GPU, 16 CPU, 128 GB (546 GB/s) | Batch Auto (8), Decoupled Dual-Stream | 1.354s (88.6×) / 1.372s (87.5×) | 1.333s (90.0×) / 1.350s (88.9×) | **94.8× RTFx (1.266s)** |
 | **mbp14** | M4 Max | 32 GPU, 14 CPU, 36 GB (410 GB/s) | Batch Auto (4), Dual Stream | **1.614s (74.4×)** / 1.632s (73.5×) | 1.658s (72.4×) / 1.689s (71.0×) | **74.5× RTFx** |
 | **m4mini** | M4 Pro | 20 GPU, 14 CPU, 64 GB (273 GB/s) | Batch Auto (4), Dual Stream | **2.448s (49.0×)** / 2.486s (48.3×) | 2.520s (47.6×) / 2.549s (47.1×) | **49.2× RTFx** |
 
 *All runs strictly nominal-to-nominal thermal state; stem fidelity verified: Drums 71.56 dB, Bass 89.28 dB, Other 87.44 dB, Vocals 64.60 dB; peak absolute error $\le 3.96 \times 10^{-5}$.*
+*Note on local Batch 8:* The 1.333s (90.0×) entry represents the pre-decoupling baseline under the balanced ABBA suite; adopting waveform stream decoupling (Headroom 1) advanced Batch 8 on M4 Max to its all-time record of 1.266s (94.8× RTFx).
 
 ### 6. Adopted Default: Auto-Tuned Topology Batch Sizing (`DEFAULT_BATCH_SIZE = "auto"`)
 - `DEFAULT_BATCH_SIZE` across `demucs_mlx.defaults`, `demucs_mlx.api.Separator`, and `demucs_mlx.separate` is now `"auto"`.

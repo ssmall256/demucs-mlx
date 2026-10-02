@@ -14,7 +14,7 @@ import mlx.core as mx
 from packaging import version
 
 from .defaults import DEFAULT_BATCH_SIZE
-from .mlx_utils import center_trim
+from .mlx_utils import center_trim, is_dconv_compile_enabled, outer_compile_context
 from .metal_kernels import fused_overlap_add
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
@@ -43,39 +43,41 @@ def _forward(
     if not enabled or kwargs or (getattr(model, "_ane_time_conv", None) is not None and precomputed_conv is None):
         return _call(model, x)
 
-    model_id = id(model)
-    slot = _COMPILED_FORWARDS.get(model_id)
-    if slot is None or slot[0]() is not model:
-        def forget(_ref, *, key=model_id):
-            current = _COMPILED_FORWARDS.get(key)
-            if current is not None and current[0] is _ref:
-                _COMPILED_FORWARDS.pop(key, None)
+    with outer_compile_context(True):
+        model_id = id(model)
+        slot = _COMPILED_FORWARDS.get(model_id)
+        if slot is None or slot[0]() is not model:
+            def forget(_ref, *, key=model_id):
+                current = _COMPILED_FORWARDS.get(key)
+                if current is not None and current[0] is _ref:
+                    _COMPILED_FORWARDS.pop(key, None)
 
-        try:
-            ref = weakref.ref(model, forget)
-        except TypeError:
+            try:
+                ref = weakref.ref(model, forget)
+            except TypeError:
+                return _call(model, x)
+            slot = (ref, {})
+            _COMPILED_FORWARDS[model_id] = slot
+        ref, per_shape = slot
+        conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype)) if precomputed_conv is not None else None
+        dconv_enabled = "1" if is_dconv_compile_enabled() else "0"
+        key = (tuple(x.shape), str(x.dtype), conv_key, dconv_enabled)
+        if key not in per_shape:
+            # Spectral tuning may evaluate candidate kernels, which cannot happen
+            # inside an MLX compile trace. This useful first call populates it.
+            per_shape[key] = None
             return _call(model, x)
-        slot = (ref, {})
-        _COMPILED_FORWARDS[model_id] = slot
-    ref, per_shape = slot
-    conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype)) if precomputed_conv is not None else None
-    key = (tuple(x.shape), str(x.dtype), conv_key, os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1"))
-    if key not in per_shape:
-        # Spectral tuning may evaluate candidate kernels, which cannot happen
-        # inside an MLX compile trace. This useful first call populates it.
-        per_shape[key] = None
-        return _call(model, x)
 
-    compiled = per_shape[key]
-    if compiled is None:
+        compiled = per_shape[key]
+        if compiled is None:
+            if precomputed_conv is not None:
+                compiled = mx.compile(lambda t, c, _ref=ref: _ref()(t, precomputed_conv=c))
+            else:
+                compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
+            per_shape[key] = compiled
         if precomputed_conv is not None:
-            compiled = mx.compile(lambda t, c, _ref=ref: _ref()(t, precomputed_conv=c))
-        else:
-            compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
-        per_shape[key] = compiled
-    if precomputed_conv is not None:
-        return compiled(x, precomputed_conv)
-    return compiled(x)
+            return compiled(x, precomputed_conv)
+        return compiled(x)
 
 
 
@@ -304,6 +306,17 @@ def apply_model(
         if current:
             batches_indices.append(current)
 
+        compile_enabled = (
+            bool(compile)
+            if compile is not None
+            else os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+                "0", "false", "no", "off",
+            }
+        )
+        pad_tail = os.getenv("DEMUCS_MLX_PAD_TAIL", "0").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+
         def prepare_batch(group):
             inputs = []
             for i, offset, this_chunk_len in group:
@@ -311,7 +324,7 @@ def apply_model(
                 padded = chunk.padded(std_valid_len)
                 inputs.append(padded)
             actual_count = len(inputs)
-            if compile and len(batches_indices) > 1 and actual_count < effective_batch_size:
+            if compile_enabled and pad_tail and len(batches_indices) > 1 and actual_count < effective_batch_size:
                 while len(inputs) < effective_batch_size:
                     inputs.append(inputs[-1])
             stacked = mx.stack(inputs)
@@ -322,60 +335,61 @@ def apply_model(
             return flat, group, actual_count, b_seg, b_audio
 
         all_chunk_outputs = []
-        try:
-            next_batch_data = None
-            next_fut = None
-            if batches_indices:
-                next_batch_data = prepare_batch(batches_indices[0])
-                if ane_worker is not None:
-                    next_fut = ane_worker.submit(next_batch_data[0])
-
-            for b_idx in range(len(batches_indices)):
-                flat, group, actual_count, b_seg, b_audio = next_batch_data
-                curr_fut = next_fut
-
-                if b_idx + 1 < len(batches_indices):
-                    next_batch_data = prepare_batch(batches_indices[b_idx + 1])
+        with outer_compile_context(compile_enabled):
+            try:
+                next_batch_data = None
+                next_fut = None
+                if batches_indices:
+                    next_batch_data = prepare_batch(batches_indices[0])
                     if ane_worker is not None:
                         next_fut = ane_worker.submit(next_batch_data[0])
-                else:
-                    next_batch_data = None
-                    next_fut = None
 
-                conv_mx = None
-                if curr_fut is not None:
-                    wait_start = time.perf_counter()
-                    conv = curr_fut.result()
-                    ane_worker.wait_seconds += time.perf_counter() - wait_start
-                    transfer_start = time.perf_counter()
-                    conv_mx = mx.asarray(conv, copy=False)
-                    ane_worker.transfer_seconds += time.perf_counter() - transfer_start
+                for b_idx in range(len(batches_indices)):
+                    flat, group, actual_count, b_seg, b_audio = next_batch_data
+                    curr_fut = next_fut
 
-                batch_out_flat = _forward(model, flat, compile=compile, precomputed_conv=conv_mx)
-                _, sources, out_c, out_t = batch_out_flat.shape
-                batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
+                    if b_idx + 1 < len(batches_indices):
+                        next_batch_data = prepare_batch(batches_indices[b_idx + 1])
+                        if ane_worker is not None:
+                            next_fut = ane_worker.submit(next_batch_data[0])
+                    else:
+                        next_batch_data = None
+                        next_fut = None
 
-                if actual_count == b_seg and all(cl == out_t for _, _, cl in group):
-                    all_chunk_outputs.append(batch_out)
-                else:
-                    for i in range(actual_count):
-                        idx, offset, this_chunk_len = group[i]
-                        chunk_out = batch_out[i : i + 1]
-                        if this_chunk_len < out_t:
-                            chunk_trimmed = center_trim(batch_out[i], this_chunk_len)
-                            pad_r = out_t - this_chunk_len
-                            chunk_out = mx.pad(
-                                chunk_trimmed, [(0, 0), (0, 0), (0, 0), (0, pad_r)]
-                            )[None, ...]
-                        all_chunk_outputs.append(chunk_out)
+                    conv_mx = None
+                    if curr_fut is not None:
+                        wait_start = time.perf_counter()
+                        conv = curr_fut.result()
+                        ane_worker.wait_seconds += time.perf_counter() - wait_start
+                        transfer_start = time.perf_counter()
+                        conv_mx = mx.asarray(conv, copy=False)
+                        ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
+                    batch_out_flat = _forward(model, flat, compile=compile, precomputed_conv=conv_mx)
+                    _, sources, out_c, out_t = batch_out_flat.shape
+                    batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
+
+                    if actual_count == b_seg and all(cl == out_t for _, _, cl in group):
+                        all_chunk_outputs.append(batch_out)
+                    else:
+                        for i in range(actual_count):
+                            idx, offset, this_chunk_len = group[i]
+                            chunk_out = batch_out[i : i + 1]
+                            if this_chunk_len < out_t:
+                                chunk_trimmed = center_trim(batch_out[i], this_chunk_len)
+                                pad_r = out_t - this_chunk_len
+                                chunk_out = mx.pad(
+                                    chunk_trimmed, [(0, 0), (0, 0), (0, 0), (0, pad_r)]
+                                )[None, ...]
+                            all_chunk_outputs.append(chunk_out)
+
+                    if progress_bar is not None:
+                        progress_bar.update(actual_count)
+
+                    mx.async_eval(batch_out)
+            finally:
                 if progress_bar is not None:
-                    progress_bar.update(actual_count)
-
-                mx.async_eval(batch_out)
-        finally:
-            if progress_bar is not None:
-                progress_bar.close()
+                    progress_bar.close()
 
         if all_chunk_outputs:
             stacked_frames = (
