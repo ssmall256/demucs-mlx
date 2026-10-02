@@ -22,7 +22,12 @@ from .mlx_layers import (
     _group_norm_via_layer_norm,
     _use_fused_gn_glu,
 )
-from .mlx_utils import MLXStateDictMixin, center_trim, unfold
+from .mlx_utils import (
+    MLXStateDictMixin,
+    center_trim,
+    is_dconv_compile_enabled,
+    unfold,
+)
 
 # ---------------------------------------------------------------------------
 # Pure-MLX resampling (factor-2 only)
@@ -444,10 +449,10 @@ class DConv(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         layers = self.layers
-        compile_enabled = os.getenv("DEMUCS_MLX_COMPILE_DCONV", "1").strip().lower()
+        compile_enabled = is_dconv_compile_enabled()
         use_nlc = not self.training and self._compile_inference and _can_use_dconv_nlc(layers)
         if use_nlc:
-            if compile_enabled not in {"0", "false", "no", "off"}:
+            if compile_enabled:
                 signature = _dconv_chain_signature(layers)
                 if self._compiled_signatures != signature:
                     self._compiled_layers = _compile_dconv_chain(layers)
