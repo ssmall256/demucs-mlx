@@ -7,6 +7,75 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## Unreleased
+
+Every model in the registry now matches upstream PyTorch Demucs. Measured end to
+end against `demucs.api.Separator` (shifts 0, same input) and written as 16-bit
+WAV, per stem: htdemucs/htdemucs_ft/htdemucs_6s 75–82 dB, hdemucs_mmi 76–82 dB,
+and the mdx, mdx_extra, mdx_q and mdx_extra_q bags 76–83 dB, with the residual
+at the 16-bit quantization floor on every stem. A new suite
+(`tests/test_upstream_parity.py`) compares each architecture with upstream.
+
+### Fixed
+
+- **HTDemucs output was wrong since 1.5.0.** The cross-transformer fed the
+  frequency branch the time branch's *updated* output instead of its input to the
+  layer, as upstream does. Stems matched upstream at only 18–24 dB; they now
+  match at 81–87 dB (75–82 dB written as 16-bit WAV).
+- **HDemucs and the time-domain Demucs were wrong in every release.**
+  `LocalState` attention contracted the softmax weights over the wrong axis
+  (hdemucs_mmi matched upstream at 10–19 dB); the x2 resampler was an
+  approximate 63-tap filter instead of julius' (the mdx bags' Demucs members
+  matched at 29–40 dB; they are now exact to 117–122 dB); `MultiWrap` padded the
+  time axis instead of frequency and dropped the transposed-convolution bias
+  correction; Wiener-filtered models swapped the sources and real/imaginary
+  axes; and `mx.angle`, which MLX does not have, crashed the magnitude path.
+- **The mdx bags could not be converted:** the registry listed every member as
+  `DemucsMLX`, so the safe cache refused the real mix of Demucs and HDemucs.
+- Chunks run at the same length as upstream: HTDemucs pads each chunk to the
+  segment and zero-pads to its training length internally (a custom `--segment`
+  matched at 18–25 dB; now 75–82 dB), and other models run each chunk, including
+  a short tail, at its own valid length.
+- Chunk outputs longer than the segment (any model whose valid length exceeds
+  it) are trimmed before overlap-add; the fused kernel read its window out of
+  bounds. The kernel now rejects a window/frame length mismatch and indexes
+  with 64-bit integers.
+- A model, transform or `Separator` built on one thread now works on another:
+  side streams are per thread, and cached arrays and weights are materialized
+  when they are created.
+- `save_audio(bits_per_sample=24)` wrote float32; it now writes 24-bit PCM.
+- The wheel did not ship `csrc/demucs_ane.m`, so the native Neural Engine
+  bridge was never available to installed users.
+- `verify_conversion` called the nonexistent `mx.core.from_dlpack` and compared
+  tensors on different devices.
+
+### Changed
+
+- Transformer attention runs in **float32 by default**. float16, the 1.5.x
+  behavior, is ~4% faster end to end and matches upstream at 72–79 dB rather
+  than 81–87 dB; opt in with `--attention fp16`,
+  `Separator(attention_precision="fp16")` or `DEMUCS_MLX_ATTENTION_FP16=1`.
+- Overlap-add is streamed: each output span is finalized as soon as no later
+  chunk can reach it, with the same fused kernel and summation order
+  (bit-identical output). Peak memory on a 21.7-minute track fell from 9.75 GB to
+  6.2 GB; time is within 0.4%.
+- Separation no longer imports NumPy. The converter moves weights from PyTorch
+  with zero-copy CPU DLPack, the Neural Engine bridge passes MLX buffers to
+  Core ML by address, and `Separator.separate_tensor` returns NumPy only when
+  `return_mx=False` (its default, for API compatibility).
+- The Neural Engine path allocates a fresh output per prediction. It reused two
+  buffers that MLX could still be reading under `async_eval`.
+- `batch_size="auto"` is sized from measurements (interleaved sweeps of batch
+  1-8, htdemucs, 216 s): 3 on M4 Pro and 32-core M4 Max, where 3 was 1.5-1.9%
+  faster than 2 and larger batches were not faster; 8 on 40-core M4 Max with at
+  least 64 GB (about 6% faster than 2, measured under desktop load); 2 elsewhere.
+  It was 4 on the former, and `fit_batch_size` then dropped any target to an
+  exact divisor even if that added batches, so on many tracks `auto` silently ran
+  at 2. Chunks are now spread evenly over the batches the target implies.
+- Chunks that run at different input lengths (a short tail on non-HTDemucs
+  models) are batched separately instead of padded to the segment.
+- `ruff` and `pyright` are clean again; CI runs the parity suite.
+
 ## 1.5.1 - 2026-10-01
 
 ### Added

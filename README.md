@@ -6,9 +6,9 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 ## Features
 
-- **Up to 94.8x realtime** on Apple Silicon (M4 Max) — >3.3x faster than Demucs with PyTorch MPS
+- **Up to 94.8x realtime** on Apple Silicon (M4 Max, measured with the now opt-in fp16 attention; fp32, the default, is ~4% slower) — >3.3x faster than Demucs with PyTorch MPS
 - **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
-- **Bit-exact parity** with upstream Demucs stems (within floating-point tolerance)
+- **Matches upstream Demucs** for every registry model: 72–83 dB SNR per stem against PyTorch on the same input, checked in CI
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
 - Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
@@ -63,6 +63,7 @@ Options:
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: auto, matched to hardware topology)
 --compile           Opt in to whole-forward compilation for fixed shapes
+--attention         Transformer attention precision: fp32 (default) or fp16 (~4% faster)
 --write-workers     Concurrent writer threads (default: 2)
 --ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
@@ -104,7 +105,8 @@ discoverable rather than buried in source.
 
 | Setting | Default | Why |
 |---|---|---|
-| `-b` / `--batch-size` | `auto` | Dynamically auto-tunes batch size based on hardware topology (e.g. 8 on M4 Max with 40 GPU cores / 546 GB/s; 2 on base chips). |
+| `-b` / `--batch-size` | `auto` | Measured per machine: 3 on M4 Pro and 32-core M4 Max, 8 on 40-core M4 Max with >= 64 GB, 2 elsewhere. Chunks are spread evenly over the batches the target implies. |
+| `--attention` | `fp32` | Matches upstream at 81–87 dB per stem. `fp16` is ~4% faster end to end and matches at 72–79 dB. |
 | `--compile` | `None` (off) | Compiles repeated forward graph execution blocks for fixed chunk shapes. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
