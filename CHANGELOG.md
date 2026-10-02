@@ -9,9 +9,14 @@ and the README after the fact.
 
 ## 1.5.1 - 2026-10-01
 
+### Added
+
+- Updated all-time throughput record to **94.8× RTFx** (1.266s peak for 120s separation)
+  on Apple M4 Max with MLX 0.32.3 and mlx-spectro 0.9.9.
+
 ### Changed
 
-- Upgraded dependency constraints to `mlx>=0.32.3,<0.33`, `mlx-audio-io>=1.3.21,<1.4`, and `mlx-spectro>=0.9.8`.
+- Upgraded dependency constraints to `mlx>=0.32.3,<0.33`, `mlx-audio-io>=1.3.21,<1.4`, and `mlx-spectro>=0.9.9`.
 - Modernized sliding-window overlap-add CPU fallback (`_overlap_add_fallback`) to native
   `out.at[:, off:end].add(...)` on MLX 0.32.3.
 

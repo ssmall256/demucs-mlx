@@ -384,7 +384,7 @@ Evaluated under strict thermal gating (`nominal -> nominal` on every trial with 
 
 | Host | Architecture | Topology | Optimal Policy | Batch 4 (GPU / ANE) | Batch 8 (GPU / ANE) | Peak Throughput |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|
-| **local** | M4 Max | 40 GPU, 16 CPU, 128 GB (546 GB/s) | Batch Auto (8), Decoupled Dual-Stream | 1.354s (88.6×) / 1.372s (87.5×) | **1.333s (90.0×)** / 1.350s (88.9×) | **93.9× RTFx (1.278s)** |
+| **local** | M4 Max | 40 GPU, 16 CPU, 128 GB (546 GB/s) | Batch Auto (8), Decoupled Dual-Stream | 1.354s (88.6×) / 1.372s (87.5×) | **1.333s (90.0×)** / 1.350s (88.9×) | **94.8× RTFx (1.266s)** |
 | **mbp14** | M4 Max | 32 GPU, 14 CPU, 36 GB (410 GB/s) | Batch Auto (4), Dual Stream | **1.614s (74.4×)** / 1.632s (73.5×) | 1.658s (72.4×) / 1.689s (71.0×) | **74.5× RTFx** |
 | **m4mini** | M4 Pro | 20 GPU, 14 CPU, 64 GB (273 GB/s) | Batch Auto (4), Dual Stream | **2.448s (49.0×)** / 2.486s (48.3×) | 2.520s (47.6×) / 2.549s (47.1×) | **49.2× RTFx** |
 
@@ -402,7 +402,7 @@ Evaluated under strict thermal gating (`nominal -> nominal` on every trial with 
 
 #### Headroom 1: Waveform Stream Decoupling (Adopted)
 - In `mlx_htdemucs.py`, waveform normalization (`xt = (xt - meant) / stdt`) previously executed on the default Metal stream before `s_side` dispatched. This created an implicit stream dependency forcing `s_side` to wait for the default stream to finish prior decoder tasks.
-- Moving waveform normalization and denormalization onto `s_side` decoupled the waveform branch end-to-end, unlocking **1.278s peak / 1.285s median (93.9× RTFx)** on 120s separation.
+- Moving waveform normalization and denormalization onto `s_side` decoupled the waveform branch end-to-end, unlocking **1.266s peak (94.8× RTFx)** on 120s separation.
 
 #### Headroom 2: Native Channels-Last (NHWC) Spectral Decoder (Measured)
 - In `tests/bench_nhwc_decoder.py`, evaluated native NHWC execution across all 4 spectral decoder layers to eliminate the 264 MB activation transposition cascade.
