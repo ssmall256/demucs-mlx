@@ -20,7 +20,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 - Python >= 3.10
 - macOS with Apple Silicon (recommended) or Linux with MLX
-- MLX 0.31.2 to 0.32.x, with mlx-audio-io 1.3.x and mlx-spectro 0.9.3 or newer
+- MLX 0.32.x (0.32.3 or newer), with mlx-audio-io 1.3.23 or newer and mlx-spectro 0.9.10 or newer
 
 ## Install
 
