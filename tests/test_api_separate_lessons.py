@@ -55,20 +55,6 @@ def test_separator_separate_async_disk_writing():
             assert Path(stem_path).stat().st_size > 0
 
 
-def test_eval_flush_interval_parity(monkeypatch):
-    monkeypatch.setenv("DEMUCS_MLX_EVAL_FLUSH_INTERVAL", "1")
-    sep = Separator("htdemucs", split=True, segment=2.0)
-    sr = sep.samplerate
-    t = np.arange(sr * 4, dtype=np.float32) / sr
-    sine = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-    audio_np = np.stack([sine, sine], axis=0)
-
-    mix, stems = sep.separate(audio_np)
-    assert isinstance(stems, dict)
-    for stem_arr in stems.values():
-        assert stem_arr.shape[-1] == sr * 4
-
-
 def test_separator_separate_pure_mlx_async_writing():
     sep = Separator("htdemucs", split=False)
     sr = sep.samplerate

@@ -30,20 +30,26 @@ def signal(seconds: int) -> np.ndarray:
     return (0.05 * tones[None, :] + noise).astype(np.float32)
 
 def main():
-    seconds = 120
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[8], help="Batch sizes to test (default: 8)")
+    parser.add_argument("--seconds", type=int, default=120, help="Audio length in seconds (default: 120)")
+    args = parser.parse_args()
+
+    seconds = args.seconds
     audio = signal(seconds)
     print(f"## {seconds}s Audio Separation Benchmark", flush=True)
 
-    for b in (4, 8):
+    for b in args.batch_sizes:
         print(f"\n### Batch Size {b} (Thermally Gated ABBA)", flush=True)
         print("| Round | Order | Path | Thermal In->Out | Wall Time | Audio/Wall (RTFx) |", flush=True)
         print("|:---:|:---:|:---:|:---:|:---:|:---:|", flush=True)
 
         gpu = Separator(seed=481, batch_size=b)
         with Separator(seed=481, batch_size=b, ane_time_encoder=True) as ane:
-            # Warmup with full batch so batch 4/8 execution paths are primed
-            gpu.separate_tensor(signal(60))
-            ane.separate_tensor(signal(60))
+            # Warmup with full batch and audio length so all chunk shape paths are primed
+            gpu.separate_tensor(signal(seconds))
+            ane.separate_tensor(signal(seconds))
             import mlx.core as mx, gc
             mx.clear_cache()
             gc.collect()
