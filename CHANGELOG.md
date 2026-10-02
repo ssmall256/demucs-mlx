@@ -7,6 +7,14 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.5.1 - 2026-10-01
+
+### Changed
+
+- Upgraded dependency constraints to `mlx>=0.32.3,<0.33`, `mlx-audio-io>=1.3.21,<1.4`, and `mlx-spectro>=0.9.8`.
+- Modernized sliding-window overlap-add CPU fallback (`_overlap_add_fallback`) to native
+  `out.at[:, off:end].add(...)` on MLX 0.32.3.
+
 ## 1.5.0 - 2026-10-01
 
 ### Added
