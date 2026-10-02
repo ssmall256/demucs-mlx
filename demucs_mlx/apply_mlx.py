@@ -30,7 +30,7 @@ def _forward(
 ) -> mx.array:
     """Optionally compile repeated GPU forward shapes after an eager first call."""
     if compile is None:
-        enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+        enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "1").strip().lower() not in {
             "0", "false", "no", "off",
         }
     else:
@@ -309,7 +309,7 @@ def apply_model(
         compile_enabled = (
             bool(compile)
             if compile is not None
-            else os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "0").strip().lower() not in {
+            else os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "1").strip().lower() not in {
                 "0", "false", "no", "off",
             }
         )

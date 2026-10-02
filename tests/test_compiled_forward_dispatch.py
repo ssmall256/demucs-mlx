@@ -24,14 +24,15 @@ class _Model:
         return 2 * x + 1
 
 
-def test_default_stays_eager(monkeypatch):
+def test_default_compiles_after_first_shape_call(monkeypatch):
     monkeypatch.delenv("DEMUCS_MLX_COMPILE_FORWARD", raising=False)
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_DCONV", "0")
     model = _Model()
     x = mx.ones((2, 2, 64))
     for _ in range(4):
         mx.eval(apply_mlx._forward(model, x))
-    assert model.calls == 4
-    assert apply_mlx._COMPILED_FORWARDS == {}
+    assert model.calls == 2  # One eager call and one trace.
+    assert len(apply_mlx._COMPILED_FORWARDS[id(model)][1]) == 1
 
 
 def test_opt_in_compiles_after_first_shape_call(monkeypatch):

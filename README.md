@@ -115,7 +115,7 @@ discoverable rather than buried in source.
 | Variable | Default | Effect |
 |---|---|---|
 | `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Runs GroupNorm+GELU/GLU through fused Metal kernels instead of the pure-MLX path. Output agrees with the unfused path to 118 dB SNR and is deterministic run to run. Timing is a wash on current hardware — 1.7331 s against a 1.7270 s control at a 1.76% noise floor — so the unfused path stays the default. Both paths expose identical parameter names, so an existing converted cache loads either way. |
-| `DEMUCS_MLX_COMPILE_FORWARD` | `0` (off) | Opt in to compiling repeated GPU forward shapes after their first eager call (or pass `--compile`). Nested DConv compilation is automatically suppressed to allow global kernel fusion across the full graph. The ANE path always bypasses this compilation. See [throughput experiments](docs/throughput.md). |
+| `DEMUCS_MLX_COMPILE_FORWARD` | `1` (on) | Compiles repeated GPU forward shapes after their first eager call (or pass `--no-compile`). Nested DConv compilation is automatically suppressed to allow global kernel fusion across the full graph. The ANE path always bypasses this compilation. See [throughput experiments](docs/throughput.md). |
 | `DEMUCS_MLX_COMPILE_DCONV` | `auto` (`1` eager, `0` compiled) | Compile DConv inference blocks after weights load. Automatically defaults to `0` when outer forward compilation is active, and `1` otherwise. Set explicitly to override. |
 
 ## Version history
