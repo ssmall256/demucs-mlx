@@ -356,8 +356,8 @@ requires-dist = [
     { name = "demucs", marker = "extra == 'ane-convert'", specifier = ">=4.0" },
     { name = "demucs", marker = "extra == 'convert'", specifier = ">=4.0" },
     { name = "mlx", specifier = ">=0.32.3,<0.33" },
-    { name = "mlx-audio-io", specifier = ">=1.3.21,<1.4" },
-    { name = "mlx-spectro", specifier = ">=0.9.9" },
+    { name = "mlx-audio-io", specifier = ">=1.3.22,<1.4" },
+    { name = "mlx-spectro", specifier = ">=0.9.10" },
     { name = "numpy" },
     { name = "packaging" },
     { name = "pyobjc-framework-coreml", marker = "sys_platform == 'darwin' and extra == 'ane'", specifier = ">=10" },
@@ -795,13 +795,13 @@ cpu = [
 
 [[package]]
 name = "mlx-audio-io"
-version = "1.3.21"
+version = "1.3.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
     { name = "mlx", extra = ["cpu"], marker = "sys_platform == 'linux' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/4c/61cde2f12d5f18924d7f38667a1acd256c2d168326aaabde397d378fc5f9/mlx_audio_io-1.3.21.tar.gz", hash = "sha256:534a95e01db2393c6f50f03832aac455e51980031dfc2ee937d5f0f7033a2cfe", size = 358360, upload-time = "2026-10-02T00:10:43.336Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/ae/65fc556cdd3470f799f05e736dd893d5786932855a5f06b7c7cb74cc3784/mlx_audio_io-1.3.22.tar.gz", hash = "sha256:2d3f10783bfbc67ba065f9d4e5df4712d7c1783c3e68bda8091b12caff6169f3", size = 363111, upload-time = "2026-10-02T15:03:05.011Z" }
 
 [[package]]
 name = "mlx-cpu"
@@ -826,7 +826,7 @@ wheels = [
 
 [[package]]
 name = "mlx-spectro"
-version = "0.9.9"
+version = "0.9.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx" },
@@ -834,9 +834,9 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-10-demucs-mlx-ane-convert' and extra == 'extra-10-demucs-mlx-convert')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/05/97265b2d44b9e98e0c1139e3e4588ce8db556521d197020cea19fe3e8181/mlx_spectro-0.9.9.tar.gz", hash = "sha256:42044a816d2fae5eed48ca10a5e1793d0c370b7f49f959c86dc0283141af07d9", size = 284219, upload-time = "2026-10-02T01:09:19.242Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/5c/443084810fd7e381e305f9f5d032e56733c6b835c70c2a6851280be16575/mlx_spectro-0.9.10.tar.gz", hash = "sha256:19bdacfab732d6eefcf06fc87849a6a0425b32133cdf52a1d7f5a2ddf713a8e7", size = 286739, upload-time = "2026-10-02T14:48:55.058Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/d8/07ed5395a6945cd2c9b6fbbbe4aeb06407099b09d37de47fc50c698689f8/mlx_spectro-0.9.9-py3-none-any.whl", hash = "sha256:71d48f671bbe58ca43662d9a9bceb48fcf0668203cbabaf7dd6a4391a232f80f", size = 84084, upload-time = "2026-10-02T01:09:17.775Z" },
+    { url = "https://files.pythonhosted.org/packages/06/ae/a0b79deb09b39d8726989b5293dabf7d43c3d65468dbec7f5636ed4b6612/mlx_spectro-0.9.10-py3-none-any.whl", hash = "sha256:4c15f0a652a6dbd8012c619245bcccd4995ecfca1e8f8fbcc2b03f2ba68f507c", size = 85196, upload-time = "2026-10-02T14:48:53.741Z" },
 ]
 
 [[package]]

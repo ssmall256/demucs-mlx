@@ -17,8 +17,8 @@ classifiers = [
 ]
 dependencies = [
   "mlx>=0.32.3,<0.33",
-  "mlx-audio-io>=1.3.21,<1.4",
-  "mlx-spectro>=0.9.9",
+  "mlx-audio-io>=1.3.22,<1.4",
+  "mlx-spectro>=0.9.10",
   "numpy",
   "packaging",
   "tqdm",

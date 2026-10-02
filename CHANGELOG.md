@@ -7,7 +7,7 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
-## Unreleased
+## 1.5.2 - 2026-10-02
 
 Every model in the registry now matches upstream PyTorch Demucs. Measured end to
 end against `demucs.api.Separator` (shifts 0, same input) and written as 16-bit
@@ -51,6 +51,9 @@ at the 16-bit quantization floor on every stem. A new suite
 
 ### Changed
 
+- Requires `mlx-audio-io>=1.3.22` (strided arrays written correctly, 24-bit and
+  short FLAC, gapless MP3) and `mlx-spectro>=0.9.10` (transforms usable from any
+  thread).
 - float16 attention keeps float32 accuracy: only the attention kernel runs in
   half precision, and the projections stay float32. The 1.5.x path also
   rounded the projections, which is where it lost accuracy (72–79 dB against
