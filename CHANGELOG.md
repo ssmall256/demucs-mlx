@@ -7,6 +7,16 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## 1.5.3 - 2026-10-02
+
+### Changed
+
+- Requires `mlx-audio-io>=1.3.23`, whose extension no longer links MLX: it
+  works with any MLX from 0.32.0 on without a rebuild, and its loads are about
+  15% faster. Output is unchanged.
+- The `[tool.uv.extra-build-dependencies]` `match-runtime` entry for
+  `mlx-audio-io` is gone; nothing needs to be built against MLX any more.
+
 ## 1.5.2 - 2026-10-02
 
 Every model in the registry now matches upstream PyTorch Demucs. Measured end to

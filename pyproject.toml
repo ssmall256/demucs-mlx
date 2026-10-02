@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
   "mlx>=0.32.3,<0.33",
-  "mlx-audio-io>=1.3.22,<1.4",
+  "mlx-audio-io>=1.3.23,<1.4",
   "mlx-spectro>=0.9.10",
   "numpy",
   "packaging",
@@ -57,9 +57,6 @@ Homepage = "https://github.com/ssmall256/demucs-mlx/"
 # coremltools 9 needs torch < 2.8; resolve the Core ML converter separately so
 # the ordinary conversion extra keeps current PyTorch.
 conflicts = [[{ extra = "convert" }, { extra = "ane-convert" }]]
-
-[tool.uv.extra-build-dependencies]
-mlx-audio-io = [{ requirement = "mlx[cpu]", match-runtime = true }]
 
 [tool.pyright]
 pythonVersion = "3.10"
