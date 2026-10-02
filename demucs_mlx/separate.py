@@ -8,7 +8,6 @@ import threading
 import typing as tp
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 
 from .defaults import DEFAULT_BATCH_SIZE
@@ -157,11 +156,12 @@ def _separate_one(
         if stage is not None:
             stage.update(1)
 
-        # Transfer once to host, then slice NumPy arrays for writer workers.
-        stems = np.asarray(estimates[0])
+        # Pure MLX zero-copy stem handoff to async writer.
+        # Materialize slice views on producer thread before worker dispatch.
+        stems = [estimates[0][i] for i in range(len(source_names))]
+        mx.eval(*stems)
         for stem_idx, stem_path in enumerate(stem_paths):
-            stem = np.ascontiguousarray(stems[stem_idx], dtype=np.float32)
-            writer.submit(stem, stem_path, samplerate=model.samplerate)
+            writer.submit(stems[stem_idx], stem_path, samplerate=model.samplerate)
             if verbose:
                 print(f"Wrote: {stem_path}")
         if stage is not None:

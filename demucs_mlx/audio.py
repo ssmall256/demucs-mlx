@@ -109,6 +109,7 @@ def save_audio(wav,
     # --- MLX HANDLING (Optimized) ---
     if isinstance(wav, mx.array):
         wav_mx = _prevent_clip_mlx(wav, mode=clip)
+        mx.eval(wav_mx)
         mac.save(str(path), wav_mx, samplerate, layout=save_layout, encoding=encoding, clip=(clip != 'none'))
     # --- NUMPY HANDLING ---
     elif isinstance(wav, np.ndarray):
@@ -182,6 +183,8 @@ class AsyncAudioWriter:
     def submit(self, wav: tp.Any, path: tp.Union[str, Path], samplerate: int) -> None:
         if self._error is not None:
             raise self._error
+        if isinstance(wav, mx.array):
+            mx.eval(wav)
         self._queue.put((wav, path, samplerate))
 
     def close(self) -> None:
