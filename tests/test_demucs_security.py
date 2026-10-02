@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import pickle
 import shlex
@@ -411,6 +412,52 @@ class SafeCacheTests(unittest.TestCase):
             converter.assert_not_called()
             self.assertEqual(_FakeHTDemucsMLX.constructions, 0)
             self.assertFalse(marker.exists())
+
+    def test_unchanged_cache_is_hashed_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, _fake_mlx_class():
+            cache = Path(temporary)
+            _write_safe_cache(cache, _config())
+            with mock.patch.object(
+                mlx_convert, "_sha256_file", wraps=mlx_convert._sha256_file
+            ) as hasher:
+                mlx_convert.load_mlx_model("htdemucs", cache_dir=str(cache), auto_convert=False)
+                mlx_convert.load_mlx_model("htdemucs", cache_dir=str(cache), auto_convert=False)
+            self.assertEqual(hasher.call_count, 1)
+            self.assertTrue((cache / "htdemucs.safetensors.verified.json").exists())
+
+    def test_an_edit_after_the_stamp_is_still_caught(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, _fake_mlx_class():
+            cache = Path(temporary)
+            _write_safe_cache(cache, _config())
+            mlx_convert.load_mlx_model("htdemucs", cache_dir=str(cache), auto_convert=False)
+            weights = cache / "htdemucs.safetensors"
+            before = os.stat(weights)
+            with weights.open("r+b") as handle:  # same size, in place
+                handle.seek(-1, os.SEEK_END)
+                last = handle.read(1)
+                handle.seek(-1, os.SEEK_END)
+                handle.write(bytes([last[0] ^ 0xFF]))
+            os.utime(weights, ns=(before.st_atime_ns, before.st_mtime_ns))
+            with self.assertRaisesRegex(SafeCacheError, "digest mismatch"):
+                mlx_convert.load_mlx_model("htdemucs", cache_dir=str(cache), auto_convert=False)
+
+    def test_a_stale_or_corrupt_stamp_falls_back_to_the_full_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, _fake_mlx_class():
+            cache = Path(temporary)
+            _write_safe_cache(cache, _config())
+            weights = cache / "htdemucs.safetensors"
+            stamp = cache / "htdemucs.safetensors.verified.json"
+            identity = mlx_convert._file_identity(weights)
+            for content in (
+                json.dumps({"sha256": "0" * 64, "identity": identity}),
+                "{not json",
+            ):
+                stamp.write_text(content)
+                with mock.patch.object(
+                    mlx_convert, "_sha256_file", wraps=mlx_convert._sha256_file
+                ) as hasher:
+                    mlx_convert.load_mlx_model("htdemucs", cache_dir=str(cache), auto_convert=False)
+                self.assertEqual(hasher.call_count, 1)
 
     def test_invalid_json_schema_class_source_and_weights_are_rejected(self) -> None:
         with _fake_mlx_class():
