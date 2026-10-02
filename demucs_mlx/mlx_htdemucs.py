@@ -10,11 +10,13 @@ import typing as tp
 import mlx.core as mx
 import mlx.nn as nn
 
-
 from .mlx_hdemucs import HDecLayer, HEncLayer, MultiWrap, ScaledEmbedding, pad1d
 from .mlx_layers import Conv1dNCL
 from .mlx_transformer import CrossTransformerEncoder
-from .mlx_utils import MLXStateDictMixin, center_trim
+from .mlx_utils import MLXStateDictMixin, center_trim, thread_side_stream
+
+if tp.TYPE_CHECKING:
+    from concurrent.futures import Future
 from .spec_mlx import CachedSpectralPair
 from .wiener_mlx import wiener
 
@@ -386,7 +388,9 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     residual=residual,
                 )
                 # z_out: [T_chunk, F, C, S, 2]
-                out_chunks.append(z_out.transpose(0, 1, 2, 4, 3))
+                # wiener() already returns [frames, F, C, S, 2]; upstream's
+                # transpose(-1, -2) converts its own [..., 2, S] layout to this.
+                out_chunks.append(z_out)
             # Concatenate time chunks: [T, F, C, S, 2]
             return mx.concatenate(out_chunks, axis=0)
 
@@ -442,10 +446,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                 transfer_start = time.perf_counter()
                 ane_future = ane_conv.submit(mix)
                 ane_conv.transfer_seconds += time.perf_counter() - transfer_start
-        s_side = getattr(self, "_stream_side", None)
-        if s_side is None:
-            s_side = mx.new_stream(mx.default_device())
-            self._stream_side = s_side
+        s_side = thread_side_stream()
 
         saved = []
         saved_t = []
@@ -458,7 +459,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             with mx.stream(s_side):
                 xt = mix
                 meant = mx.mean(xt, axis=(1, 2), keepdims=True)
-                stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+                stdt = mx.std(xt, axis=(1, 2), keepdims=True, ddof=1)
                 xt = (xt - meant) / (1e-5 + stdt)
                 for time_idx, tenc in enumerate(self.tencoder):
                     lengths_t.append(LENGTH if time_idx == 0 else xt.shape[-1])
@@ -470,7 +471,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             x = mag
             B, C, Fq, T = x.shape
             mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
-            std = mx.std(x, axis=(1, 2, 3), keepdims=True)
+            std = mx.std(x, axis=(1, 2, 3), keepdims=True, ddof=1)
             x = (x - mean) / (1e-5 + std)
 
             for idx, encode in enumerate(self.encoder):
@@ -485,7 +486,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             with mx.stream(s_side):
                 xt = mix
                 meant = mx.mean(xt, axis=(1, 2), keepdims=True)
-                stdt = mx.std(xt, axis=(1, 2), keepdims=True)
+                stdt = mx.std(xt, axis=(1, 2), keepdims=True, ddof=1)
                 xt = (xt - meant) / (1e-5 + stdt)
                 for tenc in self.tencoder:
                     lengths_t.append(xt.shape[-1])
@@ -497,7 +498,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
             x = mag
             B, C, Fq, T = x.shape
             mean = mx.mean(x, axis=(1, 2, 3), keepdims=True)
-            std = mx.std(x, axis=(1, 2, 3), keepdims=True)
+            std = mx.std(x, axis=(1, 2, 3), keepdims=True, ddof=1)
             x = (x - mean) / (1e-5 + std)
 
             for idx, encode in enumerate(self.encoder):
@@ -520,7 +521,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                         tail_outputs = ane_tail_future.result()
                         ane_tail.wait_seconds += time.perf_counter() - wait_start
                         transfer_start = time.perf_counter()
-                        tail_mx = tuple(mx.asarray(value, copy=False) for value in tail_outputs)
+                        tail_mx = tuple(tail_outputs)  # MLX arrays from the Core ML bridge
                         mx.eval(*tail_mx)
                         ane_tail.transfer_seconds += time.perf_counter() - transfer_start
                         lengths_t.extend((85_995, 21_499, 5_375))
@@ -531,7 +532,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                         conv = ane_future.result()
                         ane_conv.wait_seconds += time.perf_counter() - wait_start
                         transfer_start = time.perf_counter()
-                        conv_mx = mx.asarray(conv, copy=False)
+                        conv_mx = conv  # the Core ML bridge returns MLX arrays
                         mx.eval(conv_mx)
                         ane_conv.transfer_seconds += time.perf_counter() - transfer_start
                         xt = conv_mx
@@ -566,7 +567,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
                     conv = ane_future.result()
                     ane_conv.wait_seconds += time.perf_counter() - wait_start
                     transfer_start = time.perf_counter()
-                    conv_mx = mx.asarray(conv, copy=False)
+                    conv_mx = conv  # the Core ML bridge returns MLX arrays
                     mx.eval(conv_mx)
                     ane_conv.transfer_seconds += time.perf_counter() - transfer_start
                     lengths_t.append(LENGTH)
@@ -578,10 +579,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
 
 
         if self.crosstransformer:
-            s_side = getattr(self, "_stream_side", None)
-            if s_side is None:
-                s_side = mx.new_stream(mx.default_device())
-                self._stream_side = s_side
+            s_side = thread_side_stream()
 
             if self.bottom_channels:
                 b, c, f, t = x.shape
@@ -603,10 +601,7 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
         S = len(self.sources)
         if not has_empty_tdec:
             # Dual-branch decoders: waveform and spectral decoders are independent skip consumers.
-            s_side = getattr(self, "_stream_side", None)
-            if s_side is None:
-                s_side = mx.new_stream(mx.default_device())
-                self._stream_side = s_side
+            s_side = thread_side_stream()
 
             with mx.stream(s_side):
                 for tdec in self.tdecoder:

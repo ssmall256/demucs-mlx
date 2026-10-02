@@ -11,14 +11,21 @@ import warnings
 import weakref
 
 import mlx.core as mx
-from packaging import version
 
 from .defaults import DEFAULT_BATCH_SIZE
-from .mlx_utils import center_trim, is_dconv_compile_enabled, outer_compile_context
 from .metal_kernels import fused_overlap_add
+from .mlx_utils import center_trim, is_dconv_compile_enabled, outer_compile_context
 
 _WEIGHT_CACHE: dict[tuple[int, float, str], mx.array] = {}
 _COMPILED_FORWARDS: dict[int, tuple[weakref.ReferenceType, dict]] = {}
+
+
+def _live(ref: "weakref.ReferenceType[tp.Any]") -> tp.Any:
+    """Dereference a model weakref held by a compiled forward."""
+    model = ref()
+    if model is None:
+        raise RuntimeError("The model behind a compiled forward was garbage-collected")
+    return model
 
 
 def _forward(
@@ -40,7 +47,8 @@ def _forward(
             return m(tensor, precomputed_conv=precomputed_conv, **kwargs)
         return m(tensor, **kwargs)
 
-    if not enabled or kwargs or (getattr(model, "_ane_time_conv", None) is not None and precomputed_conv is None):
+    needs_ane_conv = getattr(model, "_ane_time_conv", None) is not None and precomputed_conv is None
+    if not enabled or kwargs or needs_ane_conv:
         return _call(model, x)
 
     with outer_compile_context(True):
@@ -59,7 +67,9 @@ def _forward(
             slot = (ref, {})
             _COMPILED_FORWARDS[model_id] = slot
         ref, per_shape = slot
-        conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype)) if precomputed_conv is not None else None
+        conv_key = None
+        if precomputed_conv is not None:
+            conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype))
         dconv_enabled = "1" if is_dconv_compile_enabled() else "0"
         key = (tuple(x.shape), str(x.dtype), conv_key, dconv_enabled)
         if key not in per_shape:
@@ -71,15 +81,63 @@ def _forward(
         compiled = per_shape[key]
         if compiled is None:
             if precomputed_conv is not None:
-                compiled = mx.compile(lambda t, c, _ref=ref: _ref()(t, precomputed_conv=c))
+                compiled = mx.compile(lambda t, c, _ref=ref: _live(_ref)(t, precomputed_conv=c))
             else:
-                compiled = mx.compile(lambda t, _ref=ref: _ref()(t))
+                compiled = mx.compile(lambda t, _ref=ref: _live(_ref)(t))
             per_shape[key] = compiled
         if precomputed_conv is not None:
             return compiled(x, precomputed_conv)
         return compiled(x)
 
 
+
+
+class _StreamingOverlapAdd:
+    """Overlap-add chunk outputs as they arrive, in bounded memory.
+
+    Chunk k covers [k * stride, k * stride + segment). Once chunks 0..n-1 have
+    arrived, no later chunk reaches below n * stride, so that span is final: it
+    is normalized with the fused kernel, written to the output, and every chunk
+    that cannot reach past it is released. At most the chunks of one batch plus
+    the few that overlap the next span are held, instead of the whole track.
+
+    Each output sample sums the same chunks in the same order as one kernel pass
+    over every chunk, so the result is bit-identical to that.
+    """
+
+    def __init__(self, window: mx.array, stride: int, length: int, out_shape: tuple, dtype):
+        self.window = window
+        self.stride = int(stride)
+        self.segment = int(window.shape[0])
+        self.length = int(length)
+        self.out = mx.zeros(out_shape, dtype=dtype)
+        self.pending: list[mx.array] = []
+        self.first_chunk = 0
+        self.received = 0
+        self.done = 0
+
+    def add(self, frames: mx.array) -> None:
+        """Queue chunk outputs shaped (n, *out_shape[:-1], segment), in chunk order."""
+        self.pending.append(frames)
+        self.received += int(frames.shape[0])
+
+    def flush(self, final: bool = False) -> None:
+        end = self.length if final else min(self.length, self.received * self.stride)
+        if end <= self.done or not self.pending:
+            return
+        frames = mx.concatenate(self.pending, axis=0) if len(self.pending) > 1 else self.pending[0]
+        base = self.first_chunk * self.stride
+        span = fused_overlap_add(frames, self.window, self.stride, end - base)
+        self.out[..., self.done:end] = span[..., self.done - base:]
+        self.done = end
+        keep_from = max(self.first_chunk, (end - self.segment) // self.stride + 1)
+        frames = frames[keep_from - self.first_chunk:]
+        self.first_chunk = keep_from
+        self.pending = [frames] if frames.shape[0] else []
+
+    def finish(self) -> mx.array:
+        self.flush(final=True)
+        return self.out
 
 
 class TensorChunk:
@@ -269,6 +327,9 @@ def apply_model(
                 mx.arange(segment_length - segment_length // 2, 0, -1),
             ], axis=0)
             weight = (weight / mx.max(weight)) ** transition_power
+            # Cached arrays must be materialized: a lazy graph is bound to the
+            # stream of the thread that built it.
+            mx.eval(weight)
             _WEIGHT_CACHE[cache_key] = weight
 
         progress_bar = None
@@ -286,24 +347,44 @@ def apply_model(
             if effective_batch_size <= 0:
                 raise ValueError("batch_size must be > 0.")
 
-        if hasattr(model, "valid_length"):
-            std_valid_len = model.valid_length(segment_length)
-        else:
-            std_valid_len = segment_length
+        from .mlx_htdemucs import HTDemucsMLX
+
+        is_htdemucs = isinstance(model, HTDemucsMLX)
+        if is_htdemucs:
+            # valid_length() rejects a segment longer than the training length.
+            model.valid_length(segment_length)
+
+        def padded_length(chunk_len: int) -> int:
+            """The input length upstream runs a chunk of chunk_len samples at.
+
+            HTDemucs: the segment, zero-padded to the training length inside
+            the model. Other models: their valid length for this chunk alone,
+            so a short chunk is never padded with silence or neighbouring
+            audio, which would change the model's normalization and context.
+            """
+            if is_htdemucs:
+                return segment_length
+            if hasattr(model, "valid_length"):
+                return model.valid_length(chunk_len)
+            return chunk_len
 
         # Check if ANE worker is present for pipelined prefetching
         ane_worker = getattr(model, "_ane_time_conv", None)
         if ane_worker is None and hasattr(model, "models") and len(model.models) > 0:
             ane_worker = getattr(model.models[0], "_ane_time_conv", None)
 
+        # Batch consecutive chunks that run at the same input length.
         batches_indices = []
         current = []
+        current_len = None
         for i, offset in enumerate(offsets):
             this_chunk_len = min(segment_length, length - offset)
-            current.append((i, offset, this_chunk_len))
-            if len(current) >= effective_batch_size:
+            this_padded = padded_length(this_chunk_len)
+            if current and (this_padded != current_len or len(current) >= effective_batch_size):
                 batches_indices.append(current)
                 current = []
+            current.append((i, offset, this_chunk_len))
+            current_len = this_padded
         if current:
             batches_indices.append(current)
 
@@ -322,20 +403,23 @@ def apply_model(
             inputs = []
             for i, offset, this_chunk_len in group:
                 chunk = TensorChunk(mix_chunk, offset, this_chunk_len)
-                padded = chunk.padded(std_valid_len)
+                padded = chunk.padded(padded_length(this_chunk_len))
                 inputs.append(padded)
             actual_count = len(inputs)
-            if compile_enabled and pad_tail and len(batches_indices) > 1 and actual_count < effective_batch_size:
+            short_batch = len(batches_indices) > 1 and actual_count < effective_batch_size
+            if compile_enabled and pad_tail and short_batch:
                 while len(inputs) < effective_batch_size:
                     inputs.append(inputs[-1])
             stacked = mx.stack(inputs)
-            b_seg, b_audio, ch, l = stacked.shape
-            flat = stacked.reshape(b_seg * b_audio, ch, l)
+            b_seg, b_audio, ch, seg_len = stacked.shape
+            flat = stacked.reshape(b_seg * b_audio, ch, seg_len)
             if ane_worker is not None:
                 mx.eval(flat)
             return flat, group, actual_count, b_seg, b_audio
 
-        all_chunk_outputs = []
+        ola = _StreamingOverlapAdd(
+            weight, stride, length, (batch, len(model.sources), channels, length), mix_dtype
+        )
         with outer_compile_context(compile_enabled):
             try:
                 next_batch_data = None
@@ -346,6 +430,7 @@ def apply_model(
                         next_fut = ane_worker.submit(next_batch_data[0])
 
                 for b_idx in range(len(batches_indices)):
+                    assert next_batch_data is not None
                     flat, group, actual_count, b_seg, b_audio = next_batch_data
                     curr_fut = next_fut
 
@@ -363,50 +448,59 @@ def apply_model(
                         conv = curr_fut.result()
                         ane_worker.wait_seconds += time.perf_counter() - wait_start
                         transfer_start = time.perf_counter()
-                        conv_mx = mx.asarray(conv, copy=False)
+                        conv_mx = conv  # the Core ML bridge returns MLX arrays
                         ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
-                    batch_out_flat = _forward(model, flat, compile=compile, precomputed_conv=conv_mx)
+                    batch_out_flat = _forward(
+                        model, flat, compile=compile, precomputed_conv=conv_mx
+                    )
                     _, sources, out_c, out_t = batch_out_flat.shape
                     batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
 
-                    if actual_count == b_seg and all(cl == out_t for _, _, cl in group):
-                        all_chunk_outputs.append(batch_out)
+                    # Every overlap-add frame is exactly segment_length long so it
+                    # lines up with the weight window. The model output can be
+                    # longer (valid_length padding), so trim each chunk to its own
+                    # length, as upstream does, then zero-pad short tail chunks;
+                    # a tail chunk always ends at the input's end, so its padding
+                    # falls outside the output and adds no weight.
+                    if actual_count < b_seg:
+                        batch_out = batch_out[:actual_count]
+                    if all(cl == segment_length for _, _, cl in group):
+                        ola.add(center_trim(batch_out, segment_length))
                     else:
                         for i in range(actual_count):
-                            idx, offset, this_chunk_len = group[i]
-                            chunk_out = batch_out[i : i + 1]
-                            if this_chunk_len < out_t:
-                                chunk_trimmed = center_trim(batch_out[i], this_chunk_len)
-                                pad_r = out_t - this_chunk_len
+                            _, _, this_chunk_len = group[i]
+                            chunk_out = center_trim(batch_out[i], this_chunk_len)
+                            if this_chunk_len < segment_length:
                                 chunk_out = mx.pad(
-                                    chunk_trimmed, [(0, 0), (0, 0), (0, 0), (0, pad_r)]
-                                )[None, ...]
-                            all_chunk_outputs.append(chunk_out)
+                                    chunk_out,
+                                    [(0, 0), (0, 0), (0, 0), (0, segment_length - this_chunk_len)],
+                                )
+                            ola.add(chunk_out[None, ...])
 
                     if progress_bar is not None:
                         progress_bar.update(actual_count)
 
-                    mx.async_eval(batch_out)
+                    ola.flush()
+                    mx.async_eval(ola.out)
             finally:
                 if progress_bar is not None:
                     progress_bar.close()
 
-        if all_chunk_outputs:
-            stacked_frames = (
-                mx.concatenate(all_chunk_outputs, axis=0)
-                if len(all_chunk_outputs) > 1
-                else all_chunk_outputs[0]
-            )
-            out = fused_overlap_add(stacked_frames, weight, stride, length)
-        else:
-            out = mx.zeros((batch, len(model.sources), channels, length), dtype=mix_dtype)
+        out = ola.finish()
         mx.eval(out)
         return out
 
 
     # No split path
-    valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length
+    from .mlx_htdemucs import HTDemucsMLX
+
+    if isinstance(model, HTDemucsMLX) and segment is not None:
+        valid_length = int(segment * model.samplerate)
+    elif hasattr(model, "valid_length"):
+        valid_length = model.valid_length(length)
+    else:
+        valid_length = length
     padded_mix = mix_chunk.padded(valid_length)
     out = _forward(model, padded_mix, compile=compile)
     return center_trim(out, length)

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import shlex
+import sys
 import tempfile
 import typing as tp
 import warnings
@@ -22,7 +23,6 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import mlx.core as mx
-import numpy as np
 from mlx.utils import tree_flatten, tree_unflatten
 from packaging import version
 
@@ -131,7 +131,9 @@ def _encode_json_value(
                 depth=depth + 1,
             ),
         }
-    if isinstance(value, np.generic):
+    # A NumPy scalar can only exist if NumPy is already imported; never import it here.
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.generic):
         return _encode_json_value(value.item(), path, budget=budget, depth=depth)
     if isinstance(value, (list, tuple)):
         if len(value) > SAFE_CACHE_MAX_COLLECTION:
@@ -594,19 +596,19 @@ class BagOfModelsMLX:
         return self
 
 
-def convert_conv_weight(weight: np.ndarray, conv_type: str, transpose: bool = True) -> np.ndarray:
+def convert_conv_weight(weight: mx.array, conv_type: str, transpose: bool = True) -> mx.array:
     """Convert convolution weight from PyTorch to MLX layout."""
     if not transpose:
         return weight
 
     if conv_type == "conv1d":
-        return np.transpose(weight, (0, 2, 1))
+        return mx.transpose(weight, (0, 2, 1))
     elif conv_type == "conv_transpose1d":
-        return np.transpose(weight, (1, 2, 0))
+        return mx.transpose(weight, (1, 2, 0))
     elif conv_type == "conv2d":
-        return np.transpose(weight, (0, 2, 3, 1))
+        return mx.transpose(weight, (0, 2, 3, 1))
     elif conv_type == "conv_transpose2d":
-        return np.transpose(weight, (1, 2, 3, 0))
+        return mx.transpose(weight, (1, 2, 3, 0))
     else:
         raise ValueError(f"Unknown conv_type: {conv_type}")
 
@@ -637,8 +639,8 @@ def convert_state_dict(
                 module_param_types[f"{module_name}.weight"] = "conv_transpose2d"
 
     for name, param in torch_state.items():
-        # Convert to numpy
-        np_param = param.detach().cpu().numpy()
+        # Zero-copy CPU DLPack import (MPS tensors would need a sync first).
+        mlx_param = mx.asarray(param.detach().cpu().contiguous())
 
         # Determine if this is a conv weight that needs transposition
         needs_transpose = False
@@ -656,7 +658,7 @@ def convert_state_dict(
             needs_transpose = True
         elif is_conv_like_weight:
             # Determine convolution type by parameter shape and name
-            ndim = len(np_param.shape)
+            ndim = len(mlx_param.shape)
             is_transpose = "conv_tr" in name.lower() or "transpose" in name.lower()
 
             if ndim == 3:  # Conv1d or ConvTranspose1d
@@ -669,12 +671,12 @@ def convert_state_dict(
 
         # Apply transformation if needed
         if needs_transpose and conv_type:
-            np_param = convert_conv_weight(np_param, conv_type)
+            mlx_param = convert_conv_weight(mlx_param, conv_type)
             if verbose:
-                print(f"  Transposed {name}: {param.shape} → {np_param.shape}")
+                print(f"  Transposed {name}: {param.shape} → {mlx_param.shape}")
 
         # Convert to MLX array
-        flat_mlx_state[name] = mx.array(np_param)
+        flat_mlx_state[name] = mx.contiguous(mlx_param)
 
     # Map GroupNorm wrapper names: normX.weight -> normX.gn.weight
     norm_wrapper_fixes = {}
@@ -741,28 +743,28 @@ def convert_state_dict(
             new_name = name.replace("self_attn", "attn")
 
             if ".in_proj_weight" in name:
-                weight = np.array(flat_mlx_state[name])
+                weight = flat_mlx_state[name]
                 embed_dim = weight.shape[0] // 3
                 query_weight = weight[:embed_dim, :]
                 key_weight = weight[embed_dim : 2 * embed_dim, :]
                 value_weight = weight[2 * embed_dim :, :]
 
                 base = new_name.replace(".in_proj_weight", "")
-                transformer_fixes[f"{base}.query_proj.weight"] = mx.array(query_weight)
-                transformer_fixes[f"{base}.key_proj.weight"] = mx.array(key_weight)
-                transformer_fixes[f"{base}.value_proj.weight"] = mx.array(value_weight)
+                transformer_fixes[f"{base}.query_proj.weight"] = mx.contiguous(query_weight)
+                transformer_fixes[f"{base}.key_proj.weight"] = mx.contiguous(key_weight)
+                transformer_fixes[f"{base}.value_proj.weight"] = mx.contiguous(value_weight)
 
             elif ".in_proj_bias" in name:
-                bias = np.array(flat_mlx_state[name])
+                bias = flat_mlx_state[name]
                 embed_dim = bias.shape[0] // 3
                 query_bias = bias[:embed_dim]
                 key_bias = bias[embed_dim : 2 * embed_dim]
                 value_bias = bias[2 * embed_dim :]
 
                 base = new_name.replace(".in_proj_bias", "")
-                transformer_fixes[f"{base}.query_proj.bias"] = mx.array(query_bias)
-                transformer_fixes[f"{base}.key_proj.bias"] = mx.array(key_bias)
-                transformer_fixes[f"{base}.value_proj.bias"] = mx.array(value_bias)
+                transformer_fixes[f"{base}.query_proj.bias"] = mx.contiguous(query_bias)
+                transformer_fixes[f"{base}.key_proj.bias"] = mx.contiguous(key_bias)
+                transformer_fixes[f"{base}.value_proj.bias"] = mx.contiguous(value_bias)
 
             elif ".out_proj." in name:
                 transformer_fixes[new_name] = flat_mlx_state[name]
@@ -1025,38 +1027,33 @@ def verify_conversion(
 ) -> bool:
     """Verify MLX conversion by comparing outputs."""
     import torch  # LAZY IMPORT
-    from torch.utils.dlpack import from_dlpack, to_dlpack
 
     if verbose:
         print("   Testing with random input...")
 
     torch_input = torch.randn(1, 2, 44100 * 4)
-    # Zero-copy torch -> mlx via DLPack
-    mlx_input = mx.core.from_dlpack(to_dlpack(torch_input.contiguous()))
+    # Zero-copy CPU DLPack import.
+    mlx_input = mx.asarray(torch_input.contiguous())
 
     with torch.no_grad():
         torch_model.eval()
-        torch_output = torch_model(torch_input)
+        torch_output = mx.asarray(torch_model(torch_input).contiguous())
 
     if hasattr(mlx_model, "eval"):
         mlx_model.eval()
     mlx_output = mlx_model(mlx_input)
 
-    # Zero-copy mlx -> torch via DLPack
-    mx.eval(mlx_output)
-    mlx_output_torch = from_dlpack(mlx_output)
-
-    max_diff = (torch_output - mlx_output_torch).abs().max().item()
-    mean_diff = (torch_output - mlx_output_torch).abs().mean().item()
-
-    torch_max = torch_output.abs().max().item()
+    difference = mx.abs(torch_output - mlx_output)
+    max_diff = mx.max(difference).item()
+    mean_diff = mx.mean(difference).item()
+    torch_max = mx.max(mx.abs(torch_output)).item()
     rel_error = max_diff / (torch_max + 1e-8)
 
     if verbose:
         print(f"   Max absolute difference: {max_diff:.2e}")
         print(f"   Mean absolute difference: {mean_diff:.2e}")
         print(f"   Relative error: {rel_error:.2e}")
-        print(f"   Output shape: {tuple(mlx_output_torch.shape)}")
+        print(f"   Output shape: {tuple(mlx_output.shape)}")
 
     if rel_error > tolerance:
         raise ValueError(f"Verification failed: relative error {rel_error:.2e} > {tolerance:.2e}")
