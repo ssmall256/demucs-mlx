@@ -701,7 +701,7 @@ wheels = [
 
 [[package]]
 name = "mlx-spectro"
-version = "0.9.8"
+version = "0.9.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mlx" },
@@ -709,9 +709,9 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/b8/62741224bebc6ad2200af6cca1c7ff21c6e5b3d332e18c180f4141b22d48/mlx_spectro-0.9.8.tar.gz", hash = "sha256:94240ad264861c8fdc6768928bcabbc17749dcc1e7619e8c5cd08a7315a7ba91", size = 284337, upload-time = "2026-10-02T00:08:16.71Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/05/97265b2d44b9e98e0c1139e3e4588ce8db556521d197020cea19fe3e8181/mlx_spectro-0.9.9.tar.gz", hash = "sha256:42044a816d2fae5eed48ca10a5e1793d0c370b7f49f959c86dc0283141af07d9", size = 284219, upload-time = "2026-10-02T01:09:19.242Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/89/e8522959bc81a515854a5d180675851f369ceb1a50956e47af9a861d6b2d/mlx_spectro-0.9.8-py3-none-any.whl", hash = "sha256:df56544b0ed17e6ece8ec6e29589b4829ef13beb7165c5362fb5be6490bd01fe", size = 84308, upload-time = "2026-10-02T00:08:15.266Z" },
+    { url = "https://files.pythonhosted.org/packages/46/d8/07ed5395a6945cd2c9b6fbbbe4aeb06407099b09d37de47fc50c698689f8/mlx_spectro-0.9.9-py3-none-any.whl", hash = "sha256:71d48f671bbe58ca43662d9a9bceb48fcf0668203cbabaf7dd6a4391a232f80f", size = 84084, upload-time = "2026-10-02T01:09:17.775Z" },
 ]
 
 [[package]]
