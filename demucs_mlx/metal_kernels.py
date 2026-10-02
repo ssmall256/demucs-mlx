@@ -774,7 +774,7 @@ def _overlap_add_fallback(
         end = off + this_len
         w = window_f32[:this_len]
         chunk_val = frames_flat[k, :, :this_len] * w.reshape(1, -1)
-        out = mx.slice_update(out, out[:, off:end] + chunk_val, mx.array([off]), axes=(1,))
+        out = out.at[:, off:end].add(chunk_val)
         sum_weight = sum_weight.at[off:end].add(w)
     out = out / mx.maximum(sum_weight.reshape(1, -1), 1e-11)
     return out.reshape(*prefix_shape, total_samples).astype(frames.dtype)
