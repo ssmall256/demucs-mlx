@@ -6,7 +6,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 ## Features
 
-- **Up to 96x realtime** on Apple Silicon (40-core M4 Max, default settings) — >3.3x faster than Demucs with PyTorch MPS
+- **About 114x realtime** once warm on a 40-core M4 Max with default settings — 2.7x faster than stock Demucs on PyTorch MPS (2.3x if Demucs is patched to keep its STFT on the GPU) and 18x faster than PyTorch on CPU ([measurements](#performance))
 - **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
 - **Matches upstream Demucs** for every registry model: 72–83 dB SNR per stem against PyTorch on the same input, checked in CI
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
@@ -20,7 +20,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 
 - Python >= 3.10
 - macOS with Apple Silicon (recommended) or Linux with MLX
-- MLX 0.32.x (0.32.3 or newer), with mlx-audio-io 1.3.23 or newer and mlx-spectro 0.9.10 or newer
+- MLX 0.32.x (0.32.3 or newer), with mlx-audio-io 1.3.24 or newer and mlx-spectro 0.9.10 or newer
 
 ## Install
 
@@ -28,24 +28,32 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 pip install demucs-mlx
 ```
 
-On first run, demucs-mlx loads cached MLX weights if available. If the optional
-`mlx-weights` package is installed locally, demucs-mlx uses its shared cache. Otherwise
-it uses its built-in cache. A cache miss is converted internally from the official
-Demucs registry using the restricted loader described below.
+That is all: the first time you use a model, demucs-mlx downloads its MLX
+weights from [Hugging Face](https://huggingface.co/ssmall256/demucs-mlx) into
+`~/.cache/demucs-mlx` (160 MB for the default `htdemucs`). The download is
+accepted only if it matches the SHA-256 digest built into this package, and
+PyTorch is never needed.
 
-To bootstrap a missing model with the public package, install the conversion extra:
+To work offline, set `DEMUCS_MLX_NO_DOWNLOAD=1` (or `HF_HUB_OFFLINE=1`) and
+either fetch the files ahead of time:
+
+```bash
+python -m demucs_mlx.hub download htdemucs --output-dir ~/.cache/demucs-mlx
+```
+
+or convert them yourself from Meta's official checkpoints, which needs the
+conversion extra:
 
 ```bash
 pip install 'demucs-mlx[convert]'
-```
-
-You can explicitly generate a safe cache in any directory with:
-
-```bash
 python -m demucs_mlx.mlx_convert htdemucs --output-dir ~/.cache/demucs-mlx
 ```
 
-Once weights are cached, the `convert` extra is no longer needed for inference.
+Conversion compares every converted model against its PyTorch source before
+writing the cache and reproduces the published files byte for byte. It is also
+the automatic fallback if a download fails. `HF_ENDPOINT` selects a mirror. If
+the optional `mlx-weights` package is installed, demucs-mlx uses its shared
+cache directory instead of `~/.cache/demucs-mlx`.
 
 ## CLI usage
 
@@ -62,10 +70,11 @@ Options:
 --seed              Optional RNG seed for reproducible shifts (default: none)
 --overlap           Overlap ratio (default: 0.25)
 -b, --batch-size    Batch size (default: auto, matched to hardware topology)
---compile           Opt in to whole-forward compilation for fixed shapes
+--compile / --no-compile  Compile the GPU forward per chunk shape (default: on)
 --attention         Attention kernel precision: fp16 (default) or fp32 (~3% slower, same accuracy)
+--prefetch-tracks   Decoded input prefetch depth (default: 2)
 --write-workers     Concurrent writer threads (default: 4)
---ane-time-encoder  Offload the first HTDemucs waveform convolution to the Neural Engine
+--io-memory-mib     Overlapping I/O budget (ceiling: min(512 MiB, RAM/8); 0: serial)
 --stem              For htdemucs_ft, compute only drums, bass, other, or vocals
 --list-models       List available models
 -v, --verbose       Verbose logging
@@ -107,7 +116,7 @@ discoverable rather than buried in source.
 |---|---|---|
 | `-b` / `--batch-size` | `auto` | Measured per machine: 3 on M4 Pro and 32-core M4 Max, 8 on 40-core M4 Max with >= 64 GB, 2 elsewhere. Chunks are spread evenly over the batches the target implies. |
 | `--attention` | `fp16` | Runs only the attention kernel in half precision; the projections stay fp32. Within 0.5 dB of `fp32` against upstream and ~3% faster end to end. `DEMUCS_MLX_ATTENTION_FP16=0` also selects `fp32`. |
-| `--compile` | `None` (off) | Compiles repeated forward graph execution blocks for fixed chunk shapes. |
+| `--compile` / `--no-compile` | unset (follows `DEMUCS_MLX_COMPILE_FORWARD`, on) | Compiles the GPU forward for each chunk shape. |
 | `--shifts` | `1` | Matches upstream Demucs. Each extra shift costs a full pass. |
 | `--overlap` | `0.25` | Matches upstream Demucs. |
 | `--write-workers` | `4` | Encodes stems concurrently while the next track runs. FLAC encoding scales with workers: 4 stems of a 3:15 track take 0.62 s at 4 against 1.22 s at 2 (M4 Max). |
@@ -117,8 +126,38 @@ discoverable rather than buried in source.
 | Variable | Default | Effect |
 |---|---|---|
 | `DEMUCS_MLX_USE_FUSED_GN_GLU` | `0` (off) | Runs GroupNorm+GELU/GLU through fused Metal kernels instead of the pure-MLX path. Output agrees with the unfused path to 118 dB SNR and is deterministic run to run. Timing is a wash on current hardware — 1.7331 s against a 1.7270 s control at a 1.76% noise floor — so the unfused path stays the default. Both paths expose identical parameter names, so an existing converted cache loads either way. |
-| `DEMUCS_MLX_COMPILE_FORWARD` | `1` (on) | Compiles repeated GPU forward shapes after their first eager call (or pass `--no-compile`). Nested DConv compilation is automatically suppressed to allow global kernel fusion across the full graph. The ANE path always bypasses this compilation. See [throughput experiments](docs/throughput.md). |
+| `DEMUCS_MLX_COMPILE_FORWARD` | `1` (on) | Compiles each GPU forward shape on its first call, so the first call returns exactly what later calls do. A valid-length tail chunk (non-HTDemucs models), which rarely recurs, runs eagerly and compiles only if seen again. `0` or `--no-compile` keeps every forward eager. Nested DConv compilation is automatically suppressed to allow global kernel fusion across the full graph. See [throughput experiments](docs/throughput.md). |
 | `DEMUCS_MLX_COMPILE_DCONV` | `auto` (`1` eager, `0` compiled) | Compile DConv inference blocks after weights load. Automatically defaults to `0` when outer forward compilation is active, and `1` otherwise. Set explicitly to override. |
+
+## Throughput
+
+RTFx is audio seconds divided by wall seconds. Measured on an M4 Max (MLX 0.32.3),
+htdemucs reaches about 114× once warm. The first separation in a new process is
+slower, about 99–107×, because it compiles the model graph, prepares Metal
+kernels and allocates GPU memory.
+
+For the best sustained throughput:
+
+1. **Keep one process and one `Separator` alive** and pass it every file (the CLI
+   does this for all files given in one invocation). Starting a process per file
+   pays Python start-up, model loading and the slower first call every time.
+2. **Leave `--batch-size` at `auto`.** It spreads chunks evenly across batches,
+   so a track compiles and allocates for fewer distinct shapes. On a 120-second
+   track the first call took 1.25 s with `auto` against 1.39–1.46 s at batch 8.
+3. **Do not clear MLX's buffer cache between tracks.** Later calls reuse it; a call
+   after `mx.clear_cache()` was 75–135 ms slower. MLX keeps roughly 16–31 GB
+   cached with htdemucs and 64–83 GB with the `mdx` models on a 128 GB machine.
+   On smaller machines, `mx.set_cache_limit()` caps it at the cost of
+   re-allocating.
+4. **Close other GPU-heavy apps.** Anything else rendering or computing on the GPU
+   shares it; measurements slowed to 70× and below while other apps were busy.
+5. **Check long sessions for slowdown** with
+   `python tests/bench_rtfx.py --audio song.m4a --processes 1 --calls 30`: if the
+   last-five median falls below the warm median, the machine is throttling.
+
+`python tests/bench_rtfx.py --audio song.m4a --processes 3 --calls 10` reports
+first-call, warm and sustained RTFx in fresh processes; its docstring defines
+each measurement.
 
 ## Version history
 
@@ -126,17 +165,22 @@ See [CHANGELOG.md](CHANGELOG.md), which the release workflow reads directly.
 
 ## Performance
 
-Benchmarked on a 3:15 stereo track (44.1 kHz, 16-bit) using `htdemucs` with default settings:
+`htdemucs`, default settings, 120 seconds of stereo 44.1 kHz audio, tensor in to
+stems out, median of four warmed calls in alternating order:
 
-| Package | Backend | Time | Speedup |
+| Package | Backend | Time | Realtime factor |
 |---------|---------|------|---------|
-| `demucs` 4.0.1 | PyTorch (CPU) | 52.3s | 0.1x |
-| `demucs` 4.0.1 | PyTorch (MPS) | 6.9s | 1x |
-| `demucs-mlx` 1.1.0 | MLX + Metal | 2.7s | **2.6x** |
+| `demucs` 4.1.0, PyTorch 2.14.1 | CPU | 19.4 s | 6x |
+| `demucs` 4.1.0, PyTorch 2.14.1 | MPS | 2.82 s | 42x |
+| same, patched to keep STFT/iSTFT on MPS | MPS | 2.39 s | 50x |
+| `demucs-mlx` (this release), MLX 0.32.3 | MLX + Metal | 1.05 s | **114x** |
 
-*Apple M4 Max, 128 GB. All runs use `htdemucs` with default settings and a single warm-up pass before timing.*
-
-In a direct alternating comparison, the current development branch's three GPU optimizations together reduced default `htdemucs` separation time by **24–27%**, increasing audio throughput by **31–38%**. These are synthetic-input, loaded-model measurements that exclude file I/O; the comparison job had substantial background GPU use, so its absolute times should not be compared with the track benchmark above. See the [reproducible throughput measurements](docs/throughput.md) for the paired results and fidelity.
+*Apple M4 Max (40-core GPU), 128 GB, October 2026. File decoding, model loading
+and the first call in a process are excluded; see [Throughput](#throughput) for
+those. Stock Demucs moves its STFT and iSTFT to the CPU when the model is on MPS;
+the patched row keeps them on the GPU, which changes its output by less than
+-120 dB. Other machines will differ. [docs/throughput.md](docs/throughput.md)
+records the individual optimizations and how they were measured.*
 
 ## Models
 
@@ -148,6 +192,7 @@ In a direct alternating comparison, the current development branch's three GPU o
 | `hdemucs_mmi` | 4 | Hybrid Demucs MMI |
 | `mdx` | 4 | Music Demixing model |
 | `mdx_extra` | 4 | MDX with extra training |
+| `mdx_q`, `mdx_extra_q` | 4 | The same bags from Meta's quantized checkpoints (conversion needs `diffq`) |
 
 For a single fine-tuned stem, `--stem` runs only its specialized model:
 
@@ -161,9 +206,16 @@ The full four-stem `htdemucs_ft` run remains available by omitting `--stem`.
 
 ## MLX model cache
 
-Pre-converted MLX weights are cached under `~/.cache/demucs-mlx` by default. When the
-optional `mlx-weights` package is installed, demucs-mlx uses its shared
+MLX weights are cached under `~/.cache/demucs-mlx` by default. Set
+`DEMUCS_MLX_CACHE_DIR` to use another directory. When the optional `mlx-weights`
+package is installed and that variable is unset, demucs-mlx uses its shared
 `~/.cache/mlx-weights/demucs-mlx` directory instead.
+
+The cache is a stable, shared location: other tools may read it or fill it. It
+holds exactly the files published at
+[ssmall256/demucs-mlx](https://huggingface.co/ssmall256/demucs-mlx), so a
+directory populated by a download, by local conversion or by another tool is
+interchangeable, and the Swift package reads the same files.
 
 Cache format v1 consists of `<model>.safetensors` and a versioned
 `<model>_config.json` sidecar. Arrays are saved and loaded with MLX's native
@@ -188,6 +240,13 @@ python -m demucs_mlx.mlx_convert htdemucs --output-dir ~/.cache/demucs-mlx
 
 ### Model trust boundary
 
+Downloaded weights are safetensors files, which hold arrays and no code. Each
+file's size and SHA-256 are fixed in `demucs_mlx/hub.py`; a download that
+differs is discarded before anything is written to the cache, and the loader
+then validates the config and re-checks the weight digest as it does for a
+local conversion. `python -m demucs_mlx.hub verify <directory>` checks a
+directory against those digests.
+
 Conversion requires PyTorch 2.6 or newer before any checkpoint is downloaded or
 deserialized. Official packages retain filename-hash verification and are loaded with
 `weights_only=True` plus a scoped allowlist of exact Demucs classes and narrowly needed
@@ -205,8 +264,7 @@ globals; it is not a resource-exhaustion sandbox for otherwise valid tensor file
 - API reference: `docs/api.md`
 - Development workflow: `docs/development.md`
 - Platform notes: `docs/platform.md`
-- Neural Engine waveform prototype and measured results: `docs/ane-prototype.md`
-- Throughput experiments and GroupNorm speedup: `docs/throughput.md`
+- Throughput measurements and how to reproduce them: `docs/throughput.md`
 
 ## License
 

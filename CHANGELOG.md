@@ -7,6 +7,72 @@ can be published.
 Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
 and the README after the fact.
 
+## Unreleased
+
+### Added
+
+- Models download automatically on first use from
+  [Hugging Face](https://huggingface.co/ssmall256/demucs-mlx), so a plain
+  `pip install demucs-mlx` works without PyTorch. Each file is checked against
+  a size and SHA-256 built into the package before it reaches the cache; a
+  failed download falls back to local conversion when the `convert` extra is
+  installed. `DEMUCS_MLX_NO_DOWNLOAD=1` or `HF_HUB_OFFLINE=1` turns downloading
+  off, `HF_ENDPOINT` selects a mirror, and `python -m demucs_mlx.hub` downloads
+  or verifies files explicitly.
+- `DEMUCS_MLX_CACHE_DIR` selects the model cache directory. The cache layout
+  (`<model>.safetensors` plus `<model>_config.json`, format version 1, identical
+  to the published files) is now documented as a location other tools may share.
+
+### Removed
+
+- The experimental Neural Engine path (`--ane-time-encoder`,
+  `Separator(ane_time_encoder=True)`, the `ane` and `ane-convert` extras and
+  `python -m demucs_mlx.ane`). It offloaded one convolution of `htdemucs` and
+  measured the same end-to-end throughput as the default GPU path, so it added
+  dependencies and code without a benefit. 1.5.x releases still contain it.
+
+### Changed
+
+- Conversion verifies by default. Every member of a bag is compared against its
+  PyTorch source at float32 with a fixed input before the cache is written, and
+  a mismatch raises instead of saving a cache marked `verification_passed:
+  false`. Automatic first-use conversion now verifies too. `--no-verify` skips
+  the comparison; `--verify` is still accepted. Previously only the first member
+  was checked, and only when `--verify` was passed.
+
+- The GPU forward compiles on the first call for each chunk shape instead of
+  running that shape eagerly once. A first 120-second htdemucs call takes about
+  1.15 s instead of 1.22-1.24 s on an M4 Max, and every model's first call now
+  returns exactly what its later calls return; the eager first call differed by
+  as little as 91.6 dB (htdemucs), 85.4 dB (htdemucs_ft) and 65.4 dB
+  (htdemucs_6s). HDemucs/Demucs valid-length tail chunks, which rarely recur,
+  still run eagerly once and compile on reuse; their outputs are unchanged.
+  Second calls no longer pay a compile. `--no-compile` and
+  `DEMUCS_MLX_COMPILE_FORWARD=0` are unchanged. See `docs/throughput.md`.
+
+### Fixed
+
+- Converting a transformer model with verification wrote the derived fused
+  attention projections (`qkv_proj`, `kv_proj`) into the cache: 40 extra tensors
+  per member, a different SHA-256, and a file the loader rejects. They are now
+  private attributes and never saved. Verified conversions are byte-identical to
+  unverified ones again.
+- Verification used an unseeded input and the float16 attention default, so
+  `htdemucs_6s` passed or failed its 1e-4 tolerance from run to run. The check
+  is now signal-to-noise agreement of at least 60 dB instead of a single-sample
+  peak ratio.
+- Conversion imported PyTorch parameters without copying, and MLX reused the
+  LSTM `bias_ih` buffer for the combined bias. The saved MLX weights were
+  correct, but the PyTorch model was left with corrupted biases, so any later
+  comparison against it was wrong. Parameters are now copied.
+
+- Cached constants built during a forward (transformer positional embeddings,
+  phased deconvolution weights, LocalState index tables and fused attention
+  projections) are evaluated where they are created. Built inside a compile
+  trace they previously stayed lazy and bound to that thread's streams, so a
+  model first run on one thread failed on another ("There is no Stream(gpu, N)
+  in current thread").
+
 ## 1.5.3 - 2026-10-02
 
 ### Changed
