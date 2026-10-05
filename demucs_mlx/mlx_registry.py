@@ -41,12 +41,14 @@ MLX_MODEL_REGISTRY = {
         "description": "MDX Track B bag (extra data)",
     },
     "mdx_q": {
+        "requires_diffq": True,
         "signatures": ["6b9c2ca1", "b72baf4e", "42e558d4", "305bc58f"],
         "model_classes": ["DemucsMLX", "DemucsMLX", "HDemucsMLX", "HDemucsMLX"],
         "is_bag": True,
         "description": "MDX Track A bag (DiffQ quantized)",
     },
     "mdx_extra_q": {
+        "requires_diffq": True,
         "signatures": ["83fc094f", "464b36d7", "14fc6a69", "7fd6ef75"],
         "model_classes": ["HDemucsMLX"] * 4,
         "is_bag": True,

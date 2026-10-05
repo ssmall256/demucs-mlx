@@ -19,7 +19,7 @@ from unittest import mock
 import mlx.core as mx
 import numpy as np
 
-from demucs_mlx import mlx_convert
+from demucs_mlx import mlx_convert, secure_demucs
 from demucs_mlx.mlx_convert import SafeCacheError
 from demucs_mlx.mlx_registry import MLX_MODEL_REGISTRY
 from demucs_mlx.secure_demucs import (
@@ -161,6 +161,67 @@ def _demucs_package():
 
 
 class RestrictedCheckpointTests(unittest.TestCase):
+    @unittest.skipUnless(torch is not None, "conversion dependencies are not installed")
+    def test_quantized_registry_models_require_diffq_before_checkpoint_loading(self) -> None:
+        assert torch is not None
+        for model_name in ("mdx_q", "mdx_extra_q"):
+            with (
+                self.subTest(model_name=model_name),
+                mock.patch.dict("sys.modules", {"diffq": None, "diffq.diffq": None}),
+                mock.patch.object(secure_demucs, "_load_package_from_url") as package_loader,
+                mock.patch.object(torch.hub, "load_state_dict_from_url") as download,
+                mock.patch.object(torch, "load") as deserialize,
+                self.assertRaisesRegex(
+                    ImportError, "requires the optional diffq dependency"
+                ) as raised,
+            ):
+                secure_demucs.get_restricted_demucs_model(model_name)
+            self.assertIn(model_name, str(raised.exception))
+            self.assertIn("python -m pip install diffq", str(raised.exception))
+            package_loader.assert_not_called()
+            download.assert_not_called()
+            deserialize.assert_not_called()
+
+    @unittest.skipUnless(torch is not None, "conversion dependencies are not installed")
+    def test_unquantized_registry_models_do_not_require_diffq(self) -> None:
+        for model_name in MLX_MODEL_REGISTRY:
+            if model_name in ("mdx_q", "mdx_extra_q"):
+                continue
+            with (
+                self.subTest(model_name=model_name),
+                mock.patch.dict("sys.modules", {"diffq": None, "diffq.diffq": None}),
+                mock.patch.object(
+                    secure_demucs,
+                    "_load_package_from_url",
+                    side_effect=RuntimeError("checkpoint loading reached"),
+                ) as package_loader,
+                self.assertRaisesRegex(RuntimeError, "checkpoint loading reached"),
+            ):
+                secure_demucs.get_restricted_demucs_model(model_name)
+            package_loader.assert_called_once_with(
+                expected_official_sources(model_name)[0].url, torch
+            )
+
+    @unittest.skipUnless(torch is not None, "conversion dependencies are not installed")
+    def test_quantized_registry_models_proceed_when_diffq_is_available(self) -> None:
+        for model_name in ("mdx_q", "mdx_extra_q"):
+            with (
+                self.subTest(model_name=model_name),
+                mock.patch.object(
+                    secure_demucs, "_diff_quantizer_class", return_value=mock.sentinel.quantizer
+                ),
+                mock.patch.object(
+                    secure_demucs,
+                    "_load_package_from_url",
+                    side_effect=RuntimeError("checkpoint loading reached"),
+                ) as package_loader,
+                self.assertRaisesRegex(RuntimeError, "checkpoint loading reached"),
+            ):
+                secure_demucs.get_restricted_demucs_model(model_name)
+            package_loader.assert_called_once_with(
+                expected_official_sources(model_name)[0].url, torch
+            )
+
     def test_torch_2_5_is_rejected_before_download(self) -> None:
         download = mock.Mock()
         fake_torch = types.SimpleNamespace(

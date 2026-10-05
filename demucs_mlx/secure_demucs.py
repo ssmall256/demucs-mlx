@@ -410,6 +410,12 @@ def get_restricted_demucs_model(model_name: str) -> RestrictedDemucsLoad:
 
     _require_safe_torch(torch)
     expected_sources = expected_official_sources(model_name)
+    if MLX_MODEL_REGISTRY[model_name].get("requires_diffq", False):
+        if _diff_quantizer_class() is None:
+            raise ImportError(
+                f"Quantized Demucs model {model_name!r} requires the optional diffq dependency. "
+                "Install with: python -m pip install diffq"
+            )
     source_map = {source.signature: source for source in expected_sources}
 
     class RestrictedRemoteRepo(ModelOnlyRepo):
