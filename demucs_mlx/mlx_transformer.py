@@ -13,7 +13,7 @@ import mlx.nn as nn
 
 from .mlx_demucs import LayerScale
 from .mlx_hdemucs import ScaledEmbedding
-from .mlx_utils import thread_side_stream
+from .mlx_utils import materialize_cached, thread_side_stream
 
 
 def create_sin_embedding(length: int, dim: int, shift: int = 0, max_period: float = 10000.0):
@@ -169,8 +169,13 @@ class FastMultiHeadAttention(nn.MultiHeadAttention):
         if self._fused:
             return
         q, k, v = self.query_proj, self.key_proj, self.value_proj
-        self.qkv_proj = self._linear((q, k, v))
-        self.kv_proj = self._linear((k, v))
+        # Underscore names keep these derived layers out of parameters()/state_dict(),
+        # so a model that has run a forward still saves the canonical key set.
+        self._qkv_proj = self._linear((q, k, v))
+        self._kv_proj = self._linear((k, v))
+        materialize_cached(
+            self._qkv_proj.weight, self._qkv_proj.bias, self._kv_proj.weight, self._kv_proj.bias
+        )
         self._fused = True
 
     def __call__(self, queries: mx.array, keys: mx.array, values: mx.array, mask=None) -> mx.array:
@@ -179,12 +184,12 @@ class FastMultiHeadAttention(nn.MultiHeadAttention):
         heads = self.num_heads
 
         if queries is keys and keys is values:
-            qkv = self.qkv_proj(queries)
+            qkv = self._qkv_proj(queries)
             C = queries.shape[-1]
             q, k, v = mx.split(qkv, [C, 2 * C], axis=-1)
         elif keys is values:
             q = self.query_proj(queries)
-            kv = self.kv_proj(keys)
+            kv = self._kv_proj(keys)
             C = keys.shape[-1]
             k, v = mx.split(kv, [C], axis=-1)
         else:
@@ -463,6 +468,7 @@ class CrossTransformerEncoder(nn.Module):
         
         # Generate new if not in cache
         pe = create_2d_sin_embedding(C, Fr, T1, self.max_period)
+        materialize_cached(pe)
         self._pe_cache[key] = pe
         return pe
 

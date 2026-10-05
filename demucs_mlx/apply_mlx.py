@@ -33,9 +33,15 @@ def _forward(
     x: mx.array,
     compile: tp.Optional[bool] = None,
     precomputed_conv: tp.Optional[mx.array] = None,
+    defer: bool = False,
     **kwargs: tp.Any,
 ) -> mx.array:
-    """Optionally compile repeated GPU forward shapes after an eager first call."""
+    """Run the GPU forward, compiling each input shape on its first call.
+
+    ``defer=True`` marks a shape that will probably not recur, such as a
+    valid-length tail chunk: it runs eagerly once and compiles only if the
+    same shape is seen again.
+    """
     if compile is None:
         enabled = os.getenv("DEMUCS_MLX_COMPILE_FORWARD", "1").strip().lower() not in {
             "0", "false", "no", "off",
@@ -72,13 +78,14 @@ def _forward(
             conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype))
         dconv_enabled = "1" if is_dconv_compile_enabled() else "0"
         key = (tuple(x.shape), str(x.dtype), conv_key, dconv_enabled)
-        if key not in per_shape:
-            # Spectral tuning may evaluate candidate kernels, which cannot happen
-            # inside an MLX compile trace. This useful first call populates it.
+        if defer and key not in per_shape:
             per_shape[key] = None
             return _call(model, x)
 
-        compiled = per_shape[key]
+        # Compiling on first use is safe for the spectral path: mlx-spectro's
+        # compiled_pair() warms up (autotuning and safety priming included) on
+        # fresh, untraced inputs even when it is built inside this trace.
+        compiled = per_shape.get(key)
         if compiled is None:
             if precomputed_conv is not None:
                 compiled = mx.compile(lambda t, c, _ref=ref: _live(_ref)(t, precomputed_conv=c))
@@ -371,6 +378,8 @@ def apply_model(
                 return model.valid_length(chunk_len)
             return chunk_len
 
+        full_padded = padded_length(segment_length)
+
         # Check if ANE worker is present for pipelined prefetching
         ane_worker = getattr(model, "_ane_time_conv", None)
         if ane_worker is None and hasattr(model, "models") and len(model.models) > 0:
@@ -456,8 +465,11 @@ def apply_model(
                         conv_mx = conv  # the Core ML bridge returns MLX arrays
                         ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
+                    # Full-segment shapes recur within a track and across tracks;
+                    # a valid-length tail is usually unique to its track.
                     batch_out_flat = _forward(
-                        model, flat, compile=compile, precomputed_conv=conv_mx
+                        model, flat, compile=compile, precomputed_conv=conv_mx,
+                        defer=padded_length(group[0][2]) != full_padded,
                     )
                     _, sources, out_c, out_t = batch_out_flat.shape
                     batch_out = batch_out_flat.reshape(b_seg, b_audio, sources, out_c, out_t)
@@ -509,5 +521,9 @@ def apply_model(
     padded_mix = mix_chunk.padded(valid_length)
     if _check_cancel is not None:
         _check_cancel()
-    out = _forward(model, padded_mix, compile=compile)
+    # A whole-track shape recurs only at a fixed HTDemucs segment length.
+    out = _forward(
+        model, padded_mix, compile=compile,
+        defer=not (isinstance(model, HTDemucsMLX) and segment is not None),
+    )
     return center_trim(out, length)

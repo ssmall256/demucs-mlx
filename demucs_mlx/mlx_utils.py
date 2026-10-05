@@ -112,6 +112,26 @@ def unfold(x: mx.array, kernel_size: int, stride: int) -> mx.array:
 _THREAD_STREAMS = threading.local()
 
 
+_TRACER_ERROR_MARKERS = ("during function transformations", "Attempting to eval an array during")
+
+
+def materialize_cached(*arrays: mx.array) -> None:
+    """Evaluate constants that will be cached and reused.
+
+    A lazy graph is bound to the stream of the thread that built it, and one
+    first built inside an ``mx.compile`` trace is folded into that trace rather
+    than evaluated, so a later call on another thread would replay it on a
+    stream that thread does not have. Constants built only from shapes and
+    weights can be evaluated even during a trace; anything that depends on
+    traced inputs is left lazy.
+    """
+    try:
+        mx.eval(*arrays)
+    except (RuntimeError, ValueError) as error:
+        if not any(marker in str(error) for marker in _TRACER_ERROR_MARKERS):
+            raise
+
+
 def thread_side_stream() -> mx.Stream:
     """A secondary stream on the default device for the calling thread.
 

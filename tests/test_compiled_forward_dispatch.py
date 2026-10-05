@@ -24,26 +24,49 @@ class _Model:
         return 2 * x + 1
 
 
-def test_default_compiles_after_first_shape_call(monkeypatch):
+def test_default_compiles_on_first_shape_call(monkeypatch):
     monkeypatch.delenv("DEMUCS_MLX_COMPILE_FORWARD", raising=False)
     monkeypatch.setenv("DEMUCS_MLX_COMPILE_DCONV", "0")
     model = _Model()
     x = mx.ones((2, 2, 64))
     for _ in range(4):
         mx.eval(apply_mlx._forward(model, x))
-    assert model.calls == 2  # One eager call and one trace.
+    assert model.calls == 1  # Traced once; no eager call.
     assert len(apply_mlx._COMPILED_FORWARDS[id(model)][1]) == 1
 
 
-def test_opt_in_compiles_after_first_shape_call(monkeypatch):
+def test_opt_in_compiles_on_first_shape_call(monkeypatch):
     monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "1")
     monkeypatch.setenv("DEMUCS_MLX_COMPILE_DCONV", "0")
     model = _Model()
     x = mx.ones((2, 2, 64))
     for _ in range(4):
         mx.eval(apply_mlx._forward(model, x))
-    assert model.calls == 2  # One eager call and one trace.
+    assert model.calls == 1  # Traced once; no eager call.
     assert len(apply_mlx._COMPILED_FORWARDS[id(model)][1]) == 1
+
+
+def test_deferred_shape_runs_eagerly_once_then_compiles(monkeypatch):
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "1")
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_DCONV", "0")
+    model = _Model()
+    tail = mx.ones((1, 2, 48))
+    mx.eval(apply_mlx._forward(model, tail, defer=True))
+    assert model.calls == 1  # Eager; nothing compiled for a one-off shape.
+    assert list(apply_mlx._COMPILED_FORWARDS[id(model)][1].values()) == [None]
+    for _ in range(3):
+        mx.eval(apply_mlx._forward(model, tail, defer=True))
+    assert model.calls == 2  # The repeat traced it once.
+
+
+def test_compiled_and_eager_forward_agree(monkeypatch):
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "1")
+    monkeypatch.setenv("DEMUCS_MLX_COMPILE_DCONV", "0")
+    model = _Model()
+    x = mx.arange(2 * 2 * 64, dtype=mx.float32).reshape(2, 2, 64)
+    compiled = apply_mlx._forward(model, x)
+    eager = apply_mlx._forward(model, x, compile=False)
+    assert mx.array_equal(compiled, eager).item()
 
 
 def test_ane_keeps_its_path_when_compile_is_requested(monkeypatch):
@@ -79,7 +102,7 @@ def test_explicit_compile_argument_overrides_env(monkeypatch):
     x = mx.ones((2, 2, 64))
     for _ in range(4):
         mx.eval(apply_mlx._forward(model, x, compile=True))
-    assert model.calls == 2
+    assert model.calls == 1
     assert id(model) in apply_mlx._COMPILED_FORWARDS
 
     # Explicit compile=False overrides env=1

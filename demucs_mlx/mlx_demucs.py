@@ -26,6 +26,7 @@ from .mlx_utils import (
     MLXStateDictMixin,
     center_trim,
     is_dconv_compile_enabled,
+    materialize_cached,
     unfold,
 )
 
@@ -102,6 +103,7 @@ def _localstate_delta_eye_cached(T: int, dtype_str: str) -> tp.Tuple[mx.array, m
     indexes = mx.arange(T, dtype=dtype)
     delta = indexes[:, None] - indexes[None, :]
     eye = mx.eye(T, dtype=mx.bool_)
+    materialize_cached(delta, eye)
     return delta, eye
 
 

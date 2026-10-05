@@ -48,11 +48,11 @@ def main():
     times_qkv = []
     for _ in range(20):
         t0 = time.perf_counter()
-        qkv = attn.qkv_proj(q_fp16)
+        qkv = attn._qkv_proj(q_fp16)
         mx.eval(qkv)
         times_qkv.append((time.perf_counter() - t0) * 1000)
 
-    qkv = attn.qkv_proj(q_fp16)
+    qkv = attn._qkv_proj(q_fp16)
     q, k, v = mx.split(qkv, [C, 2 * C], axis=-1)
     mx.eval(q, k, v)
 

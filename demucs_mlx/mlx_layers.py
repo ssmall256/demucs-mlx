@@ -10,6 +10,8 @@ import typing as tp
 import mlx.core as mx
 import mlx.nn as nn
 
+from .mlx_utils import materialize_cached
+
 
 def _spatial_pair(value: int | tuple[int, int] | list[int]) -> tuple[int, int]:
     return (value, value) if isinstance(value, int) else (value[0], value[1])
@@ -152,6 +154,7 @@ class ConvTranspose1dNCL(nn.Module):
                 for phase in range(4)
             ]
             weight = mx.concatenate(phase_weights, axis=0)
+            materialize_cached(weight)
             cache = _PhasedWeightCache(source, weight)
             self._phased_cache = cache
 
@@ -257,6 +260,7 @@ class ConvTranspose2dNCHW(nn.Module):
             weight = mx.concatenate(phase_weights, axis=0).reshape(
                 -1, 2, 1, source.shape[-1]
             )
+            materialize_cached(weight)
             cache = _PhasedWeightCache(source, weight)
             self._phased_cache = cache
 
