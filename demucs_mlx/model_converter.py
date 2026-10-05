@@ -68,7 +68,7 @@ def get_mlx_model(name: str, repo: tp.Optional[Path] = None):
     convert_htdemucs_weights(
         name,
         output_dir=str(cache_dir),
-        verify=False,
+        verify=True,
         verbose=True,
     )
 

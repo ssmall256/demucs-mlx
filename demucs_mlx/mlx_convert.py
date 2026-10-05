@@ -709,8 +709,10 @@ def convert_state_dict(
                 module_param_types[f"{module_name}.weight"] = "conv_transpose2d"
 
     for name, param in torch_state.items():
-        # Zero-copy CPU DLPack import (MPS tensors would need a sync first).
-        mlx_param = mx.asarray(param.detach().cpu().contiguous())
+        # Copy: MLX may reuse an input buffer for a result (for example the LSTM
+        # bias sum below), which would overwrite a zero-copy view of the PyTorch
+        # parameter and corrupt the source model.
+        mlx_param = mx.array(param.detach().cpu().numpy())
 
         # Determine if this is a conv weight that needs transposition
         needs_transpose = False
@@ -947,11 +949,15 @@ def convert_single_model(torch_model: tp.Any, verbose: bool = False) -> tp.Any:
 def convert_htdemucs_weights(
     model_name: str,
     output_dir: tp.Optional[str] = None,
-    verify: bool = False,
+    verify: bool = True,
     verbose: bool = True,
 ) -> str:
     """
     Convert Demucs/HDemucs/HTDemucs PyTorch weights to MLX format.
+
+    Every converted member is compared against its PyTorch source before the
+    cache is written; a mismatch raises and writes nothing. ``verify=False``
+    skips the comparison and records ``verification_passed: false``.
     """
     # Lazy import — conversion extras are needed to identify upstream bags.
     try:
@@ -1063,15 +1069,19 @@ def convert_htdemucs_weights(
     if verify:
         if verbose:
             print("\n5. Running verification tests...")
-        try:
-            verify_conversion(torch_models[0], mlx_models[0], verbose=verbose)
-            checkpoint_config["verification_passed"] = True
-            if verbose:
-                print("   ✓ Verification passed")
-        except Exception as e:
-            if verbose:
-                print(f"   ✗ Verification failed: {e}")
-            checkpoint_config["verification_passed"] = False
+        for index, (torch_submodel, mlx_submodel) in enumerate(zip(torch_models, mlx_models)):
+            if verbose and len(torch_models) > 1:
+                print(f"   Model {index + 1}/{len(torch_models)}:")
+            try:
+                verify_conversion(torch_submodel, mlx_submodel, verbose=verbose)
+            except ValueError as error:
+                raise ValueError(
+                    f"{model_name} member {index} does not match its PyTorch source; "
+                    f"no cache was written. {error}"
+                ) from error
+        checkpoint_config["verification_passed"] = True
+        if verbose:
+            print("   ✓ Verification passed")
 
     if verbose:
         print(f"\n{5 if verify else 4}. Saving safe MLX checkpoint...")
@@ -1093,40 +1103,65 @@ def convert_htdemucs_weights(
 
 
 def verify_conversion(
-    torch_model, mlx_model, tolerance: float = 1e-4, verbose: bool = True
+    torch_model, mlx_model, min_snr_db: float = 60.0, verbose: bool = True
 ) -> bool:
-    """Verify MLX conversion by comparing outputs."""
+    """Compare MLX and PyTorch outputs; raise ValueError below ``min_snr_db``.
+
+    A correct conversion agrees at roughly 75-95 dB; a wrong layout or a missing
+    parameter lands below 40 dB.
+    """
     import torch  # LAZY IMPORT
 
     if verbose:
         print("   Testing with random input...")
 
-    torch_input = torch.randn(1, 2, 44100 * 4)
+    # Fixed input: the result must not depend on the draw.
+    torch_input = torch.randn(1, 2, 44100 * 4, generator=torch.Generator().manual_seed(0))
     # Zero-copy CPU DLPack import.
-    mlx_input = mx.asarray(torch_input.contiguous())
+    mlx_input = mx.array(torch_input.numpy())
 
     with torch.no_grad():
         torch_model.eval()
-        torch_output = mx.asarray(torch_model(torch_input).contiguous())
+        torch_output = mx.array(torch_model(torch_input).numpy())
 
     if hasattr(mlx_model, "eval"):
         mlx_model.eval()
-    mlx_output = mlx_model(mlx_input)
+    # This checks the converted weights, so compare at float32. The float16
+    # attention default is a runtime choice with its own ~1e-4 rounding.
+    from .mlx_transformer import FastMultiHeadAttention
+
+    attention = [
+        module
+        for _, module in mlx_model.named_modules()
+        if isinstance(module, FastMultiHeadAttention)
+    ]
+    previous = [module.compute_dtype for module in attention]
+    for module in attention:
+        module.set_compute_dtype(mx.float32)
+    try:
+        mlx_output = mlx_model(mlx_input)
+        mx.eval(mlx_output)
+    finally:
+        for module, dtype in zip(attention, previous):
+            module.set_compute_dtype(dtype)
 
     difference = mx.abs(torch_output - mlx_output)
     max_diff = mx.max(difference).item()
     mean_diff = mx.mean(difference).item()
     torch_max = mx.max(mx.abs(torch_output)).item()
     rel_error = max_diff / (torch_max + 1e-8)
+    noise = mx.sum(mx.square(torch_output - mlx_output)).item()
+    snr_db = 10 * math.log10(mx.sum(mx.square(torch_output)).item() / max(noise, 1e-30))
 
     if verbose:
         print(f"   Max absolute difference: {max_diff:.2e}")
         print(f"   Mean absolute difference: {mean_diff:.2e}")
         print(f"   Relative error: {rel_error:.2e}")
+        print(f"   Agreement: {snr_db:.1f} dB")
         print(f"   Output shape: {tuple(mlx_output.shape)}")
 
-    if rel_error > tolerance:
-        raise ValueError(f"Verification failed: relative error {rel_error:.2e} > {tolerance:.2e}")
+    if not snr_db >= min_snr_db:
+        raise ValueError(f"Verification failed: agreement {snr_db:.1f} dB < {min_snr_db:.1f} dB")
 
     return True
 
@@ -1172,7 +1207,7 @@ def load_mlx_model(
         convert_htdemucs_weights(
             model_name,
             output_dir=str(cache),
-            verify=False,
+            verify=True,
             verbose=verbose,
         )
         return load_mlx_model(
@@ -1386,7 +1421,12 @@ def main(argv: tp.Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Run a numerical verification after conversion",
+        help="Accepted for compatibility; verification is the default",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the numerical comparison against the PyTorch source",
     )
     parser.add_argument(
         "--quiet",
@@ -1397,7 +1437,7 @@ def main(argv: tp.Optional[list[str]] = None) -> None:
     convert_htdemucs_weights(
         args.model_name,
         output_dir=args.output_dir,
-        verify=args.verify,
+        verify=not args.no_verify,
         verbose=not args.quiet,
     )
 

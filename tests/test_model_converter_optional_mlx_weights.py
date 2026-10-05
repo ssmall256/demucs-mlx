@@ -74,7 +74,7 @@ def test_cache_miss_uses_internal_safe_converter() -> None:
     converter.assert_called_once_with(
         "htdemucs",
         output_dir=str(cache),
-        verify=False,
+        verify=True,
         verbose=True,
     )
     assert loader.call_count == 2
