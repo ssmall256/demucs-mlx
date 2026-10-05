@@ -8,7 +8,7 @@ with MLX 0.32.3, measured in October 2026. Other machines will differ.
 
 | Measurement | Definition | Result |
 |---|---|---:|
-| Warm call | A separation after the first one in a process, tensor in to stems out | about 114x |
+| Warm call | A separation after the first one in a process, tensor in to stems out | 114x |
 | First call | The first separation in a new process; includes graph compilation, Metal pipeline setup and buffer allocation. Model loading is excluded | about 99-107x |
 | PyTorch MPS | `demucs` 4.1.0 on PyTorch 2.14.1, same input and boundary, warmed | 42x |
 | PyTorch MPS, STFT on GPU | Same, with Demucs patched to keep STFT/iSTFT on MPS | 50x |

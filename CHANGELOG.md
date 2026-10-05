@@ -7,6 +7,14 @@ can be published.
 Entries before 1.4.7 were reconstructed after the fact from the commit history,
 the README and the earlier release notes file, which has since been removed.
 
+## 1.6.1 - 2026-10-05
+
+### Changed
+
+- Documentation only: the README links to
+  [demucs-mlx-swift](https://github.com/ssmall256/demucs-mlx-swift), the Swift package for macOS and iOS that shares the
+  same models, and states the measured warm throughput as 114x.
+
 ## 1.6.0 - 2026-10-05
 
 ### Added

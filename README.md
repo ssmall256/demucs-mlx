@@ -4,9 +4,12 @@ Split any song into its individual stems — vocals, drums, bass, and other inst
 
 demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://github.com/adefossez/demucs) music source separation model, built on [MLX](https://github.com/ml-explore/mlx). No PyTorch required.
 
+For Swift, macOS and iOS apps, see [demucs-mlx-swift](https://github.com/ssmall256/demucs-mlx-swift), the native Swift
+package that shares the same models.
+
 ## Features
 
-- **About 114x realtime** once warm on a 40-core M4 Max with default settings — 2.7x faster than stock Demucs on PyTorch MPS (2.3x if Demucs is patched to keep its STFT on the GPU) and 18x faster than PyTorch on CPU ([measurements](#performance))
+- **114x realtime** once warm on a 40-core M4 Max with default settings — 2.7x faster than stock Demucs on PyTorch MPS (2.3x if Demucs is patched to keep its STFT on the GPU) and 18x faster than PyTorch on CPU ([measurements](#performance))
 - **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
 - **Matches upstream Demucs** for every registry model: 72–83 dB SNR per stem against PyTorch on the same input, checked in CI
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
@@ -131,7 +134,7 @@ discoverable rather than buried in source.
 ## Throughput
 
 RTFx is audio seconds divided by wall seconds. Measured on an M4 Max (MLX 0.32.3),
-htdemucs reaches about 114× once warm. The first separation in a new process is
+htdemucs reaches 114× once warm. The first separation in a new process is
 slower, about 99–107×, because it compiles the model graph, prepares Metal
 kernels and allocates GPU memory.
 
@@ -214,7 +217,7 @@ The cache is a stable, shared location: other tools may read it or fill it. It
 holds exactly the files published at
 [ssmall256/demucs-mlx](https://huggingface.co/ssmall256/demucs-mlx), so a
 directory populated by a download, by local conversion or by another tool is
-interchangeable, and the Swift package reads the same files.
+interchangeable, and [demucs-mlx-swift](https://github.com/ssmall256/demucs-mlx-swift) reads the same files.
 
 Cache format v1 consists of `<model>.safetensors` and a versioned
 `<model>_config.json` sidecar. Arrays are saved and loaded with MLX's native
