@@ -97,3 +97,6 @@ jobs:
 
     - name: Run upstream parity regressions
       run: uv run pytest -q tests/test_upstream_parity.py
+
+    - name: Run weight download and cache replacement regressions
+      run: uv run pytest -q tests/test_hub.py tests/test_cache_regeneration.py

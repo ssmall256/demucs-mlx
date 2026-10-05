@@ -67,6 +67,7 @@ def test_cache_miss_uses_internal_safe_converter() -> None:
                 side_effect=[FileNotFoundError("missing"), sentinel],
             ) as loader,
             mock.patch("demucs_mlx.mlx_convert.convert_htdemucs_weights") as converter,
+            mock.patch("demucs_mlx.hub.downloads_enabled", return_value=False),
         ):
             model = get_mlx_model("htdemucs")
 
