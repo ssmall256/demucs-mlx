@@ -18,6 +18,7 @@ from .mlx_layers import (
     Conv1dNCL,
     ConvTranspose1dNCL,
     Lambda,
+    _conv_channels_last,
     _group_norm_via_layer_norm,
     _use_fused_gn_glu,
 )
@@ -422,18 +423,26 @@ def _dconv_block_forward_nlc(block: nn.Module, x_nlc: mx.array) -> mx.array:
         h_norm = h_norm * norm1.weight[None, None, :] + norm1.bias[None, None, :]
     h_act = nn.gelu(h_norm)
 
-    # Conv 2 in native NLC layout
-    out = conv2(h_act)
+    # Kernel-one projection as FP32 GEMM, without an NCL round trip.
+    out = _conv_channels_last(conv2, h_act)
     out_c = out.shape[-1]
 
     # Norm 2 via fast layer_norm
     eps2 = getattr(norm2, "eps", 1e-5)
     out_norm = mx.fast.layer_norm(out.reshape(N, 1, -1), None, None, eps2).reshape(N, L, out_c)
-    if getattr(norm2, "affine", True) and getattr(norm2, "weight", None) is not None:
+    affine = getattr(norm2, "affine", True) and getattr(norm2, "weight", None) is not None
+    split_affine = affine and out_norm.dtype == mx.float32 and norm2.weight.dtype == mx.float32
+    if affine and not split_affine:
         out_norm = out_norm * norm2.weight[None, None, :] + norm2.bias[None, None, :]
-
-    # GLU along last dimension
     a, b = mx.split(out_norm, 2, axis=-1)
+    if split_affine:
+        # Split before affine arithmetic so compile can fuse both affine planes
+        # with the gate, scale and residual. Read live parameters on each trace;
+        # the existing chain signature invalidates graphs after replacement.
+        wa, wb = mx.split(norm2.weight, 2)
+        ba, bb = mx.split(norm2.bias, 2)
+        a = a * wa[None, None, :] + ba[None, None, :]
+        b = b * wb[None, None, :] + bb[None, None, :]
     glu_out = a * mx.sigmoid(b)
     return glu_out * scale[None, None, :]
 

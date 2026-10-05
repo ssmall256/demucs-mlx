@@ -297,6 +297,14 @@ class Separator:
         """
         from .audio import AsyncAudioWriter, save_audio
 
+        if output_dir is not None:
+            from .io_pipeline import validate_destinations
+            track = Path(audio_or_path).stem if isinstance(audio_or_path, (str, Path)) else "track"
+            sources = [self.stem] if self.stem is not None else self.model.sources
+            validate_destinations([
+                Path(output_dir) / filename_format.format(stem=source, track=track)
+                for source in sources
+            ])
         want_mx = return_mx or (output_dir is not None)
         if isinstance(audio_or_path, (str, Path)):
             track_name = Path(audio_or_path).stem

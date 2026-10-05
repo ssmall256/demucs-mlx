@@ -204,7 +204,10 @@ def apply_model(
     *,
     source_index: tp.Optional[int] = None,
     compile: tp.Optional[bool] = None,
+    _check_cancel: tp.Optional[tp.Callable[[], None]] = None,
 ):
+    if _check_cancel is not None:
+        _check_cancel()
     progress_enabled = bool(progress)
     if num_workers > 0:
         warnings.warn("num_workers > 0 ignored on MLX.", RuntimeWarning)
@@ -238,7 +241,7 @@ def apply_model(
             result = apply_model(
                 model.models[model_index], mix, shifts, split, overlap,
                 transition_power, progress, num_workers, segment, batch_size,
-                seed=seed, _rng=rng, compile=compile,
+                seed=seed, _rng=rng, compile=compile, _check_cancel=_check_cancel,
             )
             for later in model.models[model_index + 1 :]:
                 for _ in range(shifts):
@@ -254,7 +257,7 @@ def apply_model(
             res = apply_model(
                 sub_model, mix, shifts, split, overlap, transition_power,
                 progress, num_workers, segment, batch_size, seed=seed, _rng=rng,
-                compile=compile,
+                compile=compile, _check_cancel=_check_cancel,
             )
             out = mx.array(res)
 
@@ -303,7 +306,7 @@ def apply_model(
             shifted_out = apply_model(
                 model, shifted, 0, split, overlap, transition_power,
                 False, num_workers, segment, batch_size, seed=seed, _rng=rng,
-                compile=compile,
+                compile=compile, _check_cancel=_check_cancel,
             )
             out = out + shifted_out[..., max_shift - offset:]
             mx.async_eval(out)
@@ -430,6 +433,8 @@ def apply_model(
                         next_fut = ane_worker.submit(next_batch_data[0])
 
                 for b_idx in range(len(batches_indices)):
+                    if _check_cancel is not None:
+                        _check_cancel()
                     assert next_batch_data is not None
                     flat, group, actual_count, b_seg, b_audio = next_batch_data
                     curr_fut = next_fut
@@ -502,5 +507,7 @@ def apply_model(
     else:
         valid_length = length
     padded_mix = mix_chunk.padded(valid_length)
+    if _check_cancel is not None:
+        _check_cancel()
     out = _forward(model, padded_mix, compile=compile)
     return center_trim(out, length)

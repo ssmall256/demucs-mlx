@@ -15,6 +15,27 @@ def _spatial_pair(value: int | tuple[int, int] | list[int]) -> tuple[int, int]:
     return (value, value) if isinstance(value, int) else (value[0], value[1])
 
 
+def _conv_channels_last(conv: nn.Conv1d | nn.Conv2d, x: mx.array) -> mx.array:
+    """Use a fused-bias GEMM for ungrouped FP32 kernel-one projections.
+
+    Keep the original Conv module/parameter names and read its current weights
+    on every call, including after checkpoint updates. All other cases retain
+    MLX's convolution path.
+    """
+    weight = conv.weight
+    if (
+        conv.groups == 1
+        and all(size == 1 for size in weight.shape[1:-1])
+        and _spatial_pair(conv.stride) == (1, 1)
+        and _spatial_pair(conv.padding) == (0, 0)
+        and x.dtype == mx.float32
+        and weight.dtype == mx.float32
+    ):
+        matrix = weight.reshape(weight.shape[0], weight.shape[-1]).T
+        return mx.addmm(conv.bias, x, matrix) if "bias" in conv else x @ matrix
+    return conv(x)
+
+
 class Lambda(nn.Module):
     def __init__(self, fn: tp.Callable[[mx.array], mx.array]):
         super().__init__()
@@ -71,7 +92,7 @@ class Conv1dNCL(nn.Module):
     def __call__(self, x: mx.array) -> mx.array:
         # x: (N, C, L) -> (N, L, C)
         x = x.transpose(0, 2, 1)
-        y = self.conv(x)
+        y = _conv_channels_last(self.conv, x)
         # y: (N, L, C) -> (N, C, L)
         return y.transpose(0, 2, 1)
 
@@ -177,7 +198,7 @@ class Conv2dNCHW(nn.Module):
     def __call__(self, x: mx.array) -> mx.array:
         # x: (N, C, H, W) -> (N, H, W, C)
         x = x.transpose(0, 2, 3, 1)
-        y = self.conv(x)
+        y = _conv_channels_last(self.conv, x)
         # y: (N, H, W, C) -> (N, C, H, W)
         return y.transpose(0, 3, 1, 2)
 

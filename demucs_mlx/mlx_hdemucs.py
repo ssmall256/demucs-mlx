@@ -23,6 +23,7 @@ from .mlx_layers import (
     GroupNormNCL,
     Identity,
     _use_fused_gn_glu,
+    _spatial_pair,
 )
 from .mlx_utils import MLXStateDictMixin
 from .spec_mlx import CachedSpectralPair
@@ -213,6 +214,7 @@ class HDecLayer(nn.Module):
         pad=True,
         context_freq=True,
         rewrite=True,
+        gated_rewrite=False,
     ):
         super().__init__()
         def norm_fn(d):
@@ -233,6 +235,7 @@ class HDecLayer(nn.Module):
         self.kernel_size = kernel_size
         self.norm = norm
         self.context_freq = context_freq
+        self._gated_rewrite = gated_rewrite
         if freq:
             kernel_size = [kernel_size, 1]
             stride = [stride, 1]
@@ -261,6 +264,36 @@ class HDecLayer(nn.Module):
         if dconv:
             self.dconv = DConv(chin, **dconv_kw)
 
+    def _rewrite_glu(self, x):
+        """Keep the 3x3 convolution, fusing its split bias with the GLU.
+
+        Only standard HTDemucs opts in. Read live parameters each trace; do
+        not cache derived weights or change checkpoint/module names.
+        """
+        if self._gated_rewrite and self.freq and isinstance(self.norm1, Identity):
+            conv = self.rewrite.conv
+            if (
+                x.dtype == mx.float32
+                and conv.weight.dtype == mx.float32
+                and "bias" in conv
+                and conv.bias.dtype == mx.float32
+                and conv.weight.shape[1:3] == (3, 3)
+                and conv.weight.shape[0] % 2 == 0
+                and conv.bias.shape == (conv.weight.shape[0],)
+                and conv.stride == (1, 1)
+                and conv.padding == (1, 1)
+                and _spatial_pair(conv.dilation) == (1, 1)
+                and conv.groups == 1
+            ):
+                y = mx.conv2d(x.transpose(0, 2, 3, 1), conv.weight, conv.stride,
+                              conv.padding, conv.dilation, conv.groups)
+                a, b = mx.split(y, 2, axis=-1)
+                ba, bb = mx.split(conv.bias, 2)
+                return ((a + ba) * mx.sigmoid(b + bb)).transpose(0, 3, 1, 2)
+        if self._fused_norm1:
+            return self.norm1(self.rewrite(x))
+        return GLUNCL(axis=1)(self.norm1(self.rewrite(x)))
+
     def __call__(self, x, skip, length):
         if self.freq and x.ndim == 3:
             B, C, T = x.shape
@@ -268,10 +301,7 @@ class HDecLayer(nn.Module):
         if not self.empty:
             x = x + skip
             if self.rewrite:
-                if self._fused_norm1:
-                    y = self.norm1(self.rewrite(x))
-                else:
-                    y = GLUNCL(axis=1)(self.norm1(self.rewrite(x)))
+                y = self._rewrite_glu(x)
             else:
                 y = x
             if self.dconv:

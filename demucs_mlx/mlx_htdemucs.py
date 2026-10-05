@@ -252,7 +252,8 @@ class HTDemucsMLX(MLXStateDictMixin, nn.Module):
 
             dec = HDecLayer(
                 chout_z, chin_z, dconv=dconv_mode & 2,
-                last=index == 0, context=context, **kw_dec)
+                last=index == 0, context=context,
+                gated_rewrite=not multi and freq and not norm and context == 1, **kw_dec)
             if multi:
                 dec = MultiWrap(dec, multi_freqs)
             if freq:
