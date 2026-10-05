@@ -18,13 +18,9 @@ uv run demucs-mlx /path/to/audio.wav
 
 ## Linux
 
-- Python >= 3.10 required.
-
-```bash
-uv lock
-uv sync
-uv run demucs-mlx /path/to/audio.wav
-```
+Not tested. The code falls back to plain MLX operations when Metal is
+unavailable, so it may run on MLX's CPU backend, but no release is checked
+there.
 
 ## Windows
 

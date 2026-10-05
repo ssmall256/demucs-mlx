@@ -4,8 +4,8 @@ All notable changes to this project are documented in this file. This is the fil
 the GitHub release workflow reads, so every release needs an entry here before it
 can be published.
 
-Entries before 1.4.7 were reconstructed from the commit history, `docs/release.md`
-and the README after the fact.
+Entries before 1.4.7 were reconstructed after the fact from the commit history,
+the README and the earlier release notes file, which has since been removed.
 
 ## Unreleased
 
@@ -433,5 +433,5 @@ Version bump only; no source changes. Its notes were folded into 1.4.2.
 
 ## 1.0.0
 
-Initial release: an MLX-native port of Demucs. See `docs/release.md` for the
+Initial release: an MLX-native port of Demucs. The README lists the
 differences from upstream Demucs.

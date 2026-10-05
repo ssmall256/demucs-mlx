@@ -10,7 +10,6 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 - **Auto-tuned hardware topology** — automatically configures batch sizes to match Apple Silicon memory bandwidth, GPU cores, and SLC cache
 - **Matches upstream Demucs** for every registry model: 72–83 dB SNR per stem against PyTorch on the same input, checked in CI
 - Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, zero-transpose GLU, OLA)
-- Metal-free fallbacks for non-Apple platforms (Linux)
 - No PyTorch required at inference time
 - Automatic resampling — input files at any sample rate are resampled to the model rate
 - Audio I/O via [mlx-audio-io](https://github.com/ssmall256/mlx-audio-io)
@@ -19,7 +18,7 @@ demucs-mlx is a fast, native Apple Silicon port of Meta's [Demucs](https://githu
 ## Requirements
 
 - Python >= 3.10
-- macOS with Apple Silicon (recommended) or Linux with MLX
+- macOS on Apple Silicon. The code has fallbacks for MLX without Metal, but Linux is not tested.
 - MLX 0.32.x (0.32.3 or newer), with mlx-audio-io 1.3.24 or newer and mlx-spectro 0.9.10 or newer
 
 ## Install
@@ -265,6 +264,14 @@ globals; it is not a resource-exhaustion sandbox for otherwise valid tensor file
 - Development workflow: `docs/development.md`
 - Platform notes: `docs/platform.md`
 - Throughput measurements and how to reproduce them: `docs/throughput.md`
+
+## Differences from upstream Demucs
+
+- Inference only; there is no training code.
+- `Separator` does not support progress callbacks or multi-process `jobs`.
+- Input at any sample rate is resampled to the model rate automatically.
+- PyTorch is never needed to run a model. It is only needed to convert weights
+  yourself instead of downloading them.
 
 ## License
 
