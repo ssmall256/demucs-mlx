@@ -1,3 +1,4 @@
+# pyright: reportOptionalCall=false
 """Decoder bias/split fusion preserves arithmetic, fallbacks and live weights."""
 
 import mlx.core as mx

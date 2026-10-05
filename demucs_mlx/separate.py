@@ -283,7 +283,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--io-memory-mib",
         type=int,
         default=None,
-        help="Additional I/O overlap memory in MiB (default: min(512 MiB, RAM/8); 0 disables overlap)",
+        help=(
+            "Additional I/O overlap memory in MiB "
+            "(default: min(512 MiB, RAM/8); 0 disables overlap)"
+        ),
     )
     parser.add_argument("--no-split", action="store_true", help="Disable chunked inference")
     parser.add_argument(
@@ -364,9 +367,8 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
 
     if args.verbose:
         print(f"Loading MLX model: {args.name}")
-    from .model_converter import get_mlx_model
-
     from .io_pipeline import validate_destinations
+    from .model_converter import get_mlx_model
 
     if args.io_memory_mib is not None and args.io_memory_mib < 0:
         raise SystemExit("--io-memory-mib must be >= 0")

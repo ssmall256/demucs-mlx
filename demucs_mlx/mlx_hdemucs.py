@@ -22,8 +22,8 @@ from .mlx_layers import (
     GroupNormNCHW,
     GroupNormNCL,
     Identity,
-    _use_fused_gn_glu,
     _spatial_pair,
+    _use_fused_gn_glu,
 )
 from .mlx_utils import MLXStateDictMixin
 from .spec_mlx import CachedSpectralPair
@@ -290,9 +290,11 @@ class HDecLayer(nn.Module):
                 a, b = mx.split(y, 2, axis=-1)
                 ba, bb = mx.split(conv.bias, 2)
                 return ((a + ba) * mx.sigmoid(b + bb)).transpose(0, 3, 1, 2)
+        rewrite = self.rewrite
+        assert rewrite is not None
         if self._fused_norm1:
-            return self.norm1(self.rewrite(x))
-        return GLUNCL(axis=1)(self.norm1(self.rewrite(x)))
+            return self.norm1(rewrite(x))
+        return GLUNCL(axis=1)(self.norm1(rewrite(x)))
 
     def __call__(self, x, skip, length):
         if self.freq and x.ndim == 3:

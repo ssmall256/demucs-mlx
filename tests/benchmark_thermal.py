@@ -1,9 +1,8 @@
 """CPU-only thermal guards for benchmarks already running inside MetalQ."""
 
 import json
-from pathlib import Path
 import time
-
+from pathlib import Path
 
 THERMAL_FILE = Path.home() / ".metalq" / "thermal-state"
 
