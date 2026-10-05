@@ -7,7 +7,7 @@ can be published.
 Entries before 1.4.7 were reconstructed after the fact from the commit history,
 the README and the earlier release notes file, which has since been removed.
 
-## Unreleased
+## 1.6.0 - 2026-10-05
 
 ### Added
 
@@ -33,13 +33,18 @@ the README and the earlier release notes file, which has since been removed.
 
 ### Changed
 
+- Faster inference with bit-identical stems. Pointwise projections, DConv
+  blocks and the decoder bias/GLU rewrite are fused, taking warm `htdemucs`
+  separation of 120 seconds from about 96x to about 114x realtime on an M4 Max.
+- File decoding and stem export are scheduled within a bounded memory budget
+  using mlx-audio-io's prepared-buffer writer; separating two tracks in one
+  invocation took 4.47 s instead of 5.05 s. Requires mlx-audio-io 1.3.24.
 - Conversion verifies by default. Every member of a bag is compared against its
   PyTorch source at float32 with a fixed input before the cache is written, and
   a mismatch raises instead of saving a cache marked `verification_passed:
   false`. Automatic first-use conversion now verifies too. `--no-verify` skips
   the comparison; `--verify` is still accepted. Previously only the first member
   was checked, and only when `--verify` was passed.
-
 - The GPU forward compiles on the first call for each chunk shape instead of
   running that shape eagerly once. A first 120-second htdemucs call takes about
   1.15 s instead of 1.22-1.24 s on an M4 Max, and every model's first call now
@@ -63,9 +68,8 @@ the README and the earlier release notes file, which has since been removed.
   peak ratio.
 - Conversion imported PyTorch parameters without copying, and MLX reused the
   LSTM `bias_ih` buffer for the combined bias. The saved MLX weights were
-  correct, but the PyTorch model was left with corrupted biases, so any later
+  correct, but the source PyTorch model's biases were modified, so any later
   comparison against it was wrong. Parameters are now copied.
-
 - Cached constants built during a forward (transformer positional embeddings,
   phased deconvolution weights, LocalState index tables and fused attention
   projections) are evaluated where they are created. Built inside a compile
