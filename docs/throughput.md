@@ -38,8 +38,8 @@ output unchanged to within -120 dB.
 ## Reproduce
 
 ```bash
-python tests/bench_rtfx.py --audio song.m4a --processes 3 --calls 10
-python tests/bench_rtfx.py --seconds 120 --processes 1 --calls 30   # sustained
+python benchmarks/bench_rtfx.py --audio song.m4a --processes 3 --calls 10
+python benchmarks/bench_rtfx.py --seconds 120 --processes 1 --calls 30   # sustained
 ```
 
 The script's docstring defines each measurement. Run GPU measurements one at a

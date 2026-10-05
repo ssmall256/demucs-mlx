@@ -19,11 +19,11 @@ environments need only numpy, mlx, mlx-spectro and demucs_mlx.
 
 Examples::
 
-    python tests/bench_rtfx.py --audio "song.m4a" --processes 3 --calls 10
-    python tests/bench_rtfx.py --audio song.m4a --processes 3 --calls 10 \\
+    python benchmarks/bench_rtfx.py --audio "song.m4a" --processes 3 --calls 10
+    python benchmarks/bench_rtfx.py --audio song.m4a --processes 3 --calls 10 \\
         --python .venv/bin/python \\
         --python /path/to/other-venv/bin/python
-    python tests/bench_rtfx.py --seconds 120 --calls 30 --processes 1   # sustained
+    python benchmarks/bench_rtfx.py --seconds 120 --calls 30 --processes 1   # sustained
 
 Run GPU measurements one at a time (for example through a queue) and close
 GPU-heavy apps: other processes on the GPU slow calls 2-10x.

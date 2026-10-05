@@ -1,34 +1,24 @@
 ---
-name: 🐛 Bug Report
-about: Submit a bug report to help us improve
-labels: 'bug'
+name: Bug report
+about: Something in demucs-mlx fails or produces wrong output
+labels: bug
 ---
 
-## 🐛 Bug Report
+## What happened
 
-(A clear and concise description of what the bug is)
+(A clear description of the problem, including the full error message if there is one.)
 
-## To Reproduce
+## How to reproduce
 
-(Write your steps here:)
+(The command or code you ran. If it depends on a particular audio file, say what kind: format, sample rate, length.)
 
-1. Step 1...
-1. Step 2...
-1. Step 3...
+## What you expected
 
-## Expected behavior
+## Environment
 
-(Write what you thought would happen.)
-
-## Actual Behavior
-
-(Write what happened. Add screenshots, if applicable.)
-
-## Your Environment
-
-<!-- Include as many relevant details about the environment you experienced the bug in -->
-
+- demucs-mlx version (`pip show demucs-mlx`):
+- MLX version (`pip show mlx`):
 - Python version:
 - macOS version:
-- Apple Silicon model (e.g. M1, M2, M4 Max):
-- demucs-mlx version:
+- Mac model and memory (for example M2 Pro, 16 GB):
+- Model and options used (for example `-n htdemucs_ft --shifts 2`):

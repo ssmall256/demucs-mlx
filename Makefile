@@ -18,8 +18,8 @@ test:
 	python tests/test_prefetch_thread_stream.py
 
 bench:
-	python tests/bench_metal_kernels.py
-	python tests/bench_overlap_add.py
+	python benchmarks/bench_metal_kernels.py
+	python benchmarks/bench_overlap_add.py
 
 dist:
 	python -m build

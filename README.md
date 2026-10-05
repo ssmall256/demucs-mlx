@@ -152,10 +152,10 @@ For the best sustained throughput:
 4. **Close other GPU-heavy apps.** Anything else rendering or computing on the GPU
    shares it; measurements slowed to 70× and below while other apps were busy.
 5. **Check long sessions for slowdown** with
-   `python tests/bench_rtfx.py --audio song.m4a --processes 1 --calls 30`: if the
+   `python benchmarks/bench_rtfx.py --audio song.m4a --processes 1 --calls 30`: if the
    last-five median falls below the warm median, the machine is throttling.
 
-`python tests/bench_rtfx.py --audio song.m4a --processes 3 --calls 10` reports
+`python benchmarks/bench_rtfx.py --audio song.m4a --processes 3 --calls 10` reports
 first-call, warm and sustained RTFx in fresh processes; its docstring defines
 each measurement.
 

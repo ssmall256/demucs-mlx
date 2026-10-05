@@ -1,10 +1,9 @@
 ---
-name: "❓Questions/Help/Support"
-about: If you have a question about the paper, code or algorithm, please ask here!
+name: Question
+about: Ask how to use demucs-mlx or how something in it works
 labels: question
-
 ---
 
-## ❓ Questions
+## Question
 
-(Please ask your question here.)
+(What are you trying to do, and what have you tried so far?)

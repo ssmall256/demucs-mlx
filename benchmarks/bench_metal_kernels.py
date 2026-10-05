@@ -5,7 +5,7 @@ Measures wall-clock time for each kernel at representative shapes from
 HTDemucs / HDemucs / Demucs inference. Reports speedup factors.
 
 Usage:
-    python tests/bench_metal_kernels.py
+    python benchmarks/bench_metal_kernels.py
 """
 import os
 import sys

@@ -1,7 +1,7 @@
 """Focused split-mode overlap-add benchmark.
 
-Run via metalq for MLX/Metal timing:
-    metalq submit -w -n "overlap-add bench" -- python tests/bench_overlap_add.py
+Run with no other GPU work in progress:
+    python benchmarks/bench_overlap_add.py
 """
 from __future__ import annotations
 
