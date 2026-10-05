@@ -300,11 +300,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--ane-time-encoder",
-        action="store_true",
-        help="run the first HTDemucs waveform convolution on the Neural Engine",
-    )
-    parser.add_argument(
         "--compile",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -359,11 +354,6 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         raise SystemExit(f"Unknown model '{args.name}'. Available: {known}")
     if args.stem is not None and args.name != "htdemucs_ft":
         raise SystemExit("--stem acceleration only supports htdemucs_ft")
-    if args.ane_time_encoder:
-        if args.name != "htdemucs":
-            raise SystemExit("--ane-time-encoder only supports the default htdemucs model")
-        if args.no_split or (args.segment is not None and args.segment != 7.8):
-            raise SystemExit("--ane-time-encoder requires split 7.8-second segments")
 
     if args.verbose:
         print(f"Loading MLX model: {args.name}")
@@ -387,14 +377,6 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
             set_attention_dtype(sub, attention_dtype)
     if args.stem is not None and args.stem not in model.sources:
         raise SystemExit(f"Unknown stem {args.stem!r}; available: {', '.join(model.sources)}")
-    ane_worker = None
-    if args.ane_time_encoder:
-        from .ane import WaveformConv
-
-        if len(model.models) != 1:
-            raise SystemExit("--ane-time-encoder requires a single HTDemucs model")
-        ane_worker = WaveformConv()
-        model.models[0]._ane_time_conv = ane_worker
 
     from .io_pipeline import IOBudget, estimate_track
 
@@ -468,8 +450,6 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         raise
     finally:
         cleanup = [audio.close, lambda: writer.close(_error=error), track_progress.close]
-        if ane_worker is not None:
-            cleanup.append(ane_worker.close)
         for close in cleanup:
             try:
                 close()
@@ -477,14 +457,6 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
                 control.fail(exc)
         if error is None:
             control.check()
-        if args.verbose and ane_worker is not None and control.error is None:
-            print(
-                "Neural Engine waveform convolution: "
-                f"{ane_worker.predictions} predictions, "
-                f"{ane_worker.busy_seconds:.3f}s execution, "
-                f"{ane_worker.wait_seconds:.3f}s wait, "
-                f"{ane_worker.transfer_seconds:.3f}s transfer"
-            )
 
     return 0
 

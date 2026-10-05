@@ -36,8 +36,7 @@ def main() -> None:
     model_converter.get_mlx_model = lambda _name: _FakeModel()
     try:
         # "auto" stays unresolved so apply_model can fit the batch to each
-        # track's chunk count (hardware.fit_batch_size); only the ANE path,
-        # which needs a fixed batch up front, resolves it at construction.
+        # track's chunk count (hardware.fit_batch_size).
         assert Separator().batch_size == "auto"
         assert Separator(batch_size=3).batch_size == 3
         assert Separator(batch_size="auto").batch_size == "auto"

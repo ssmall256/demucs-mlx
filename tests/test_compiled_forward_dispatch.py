@@ -69,17 +69,6 @@ def test_compiled_and_eager_forward_agree(monkeypatch):
     assert mx.array_equal(compiled, eager).item()
 
 
-def test_ane_keeps_its_path_when_compile_is_requested(monkeypatch):
-    monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "1")
-    x = mx.ones((2, 2, 64))
-    ane = _Model()
-    ane._ane_time_conv = object()
-    for _ in range(2):
-        mx.eval(apply_mlx._forward(ane, x))
-    assert ane.calls == 2
-    assert id(ane) not in apply_mlx._COMPILED_FORWARDS
-
-
 def test_explicit_opt_out_and_cache_cleanup(monkeypatch):
     x = mx.ones((2, 2, 64))
     monkeypatch.setenv("DEMUCS_MLX_COMPILE_FORWARD", "0")

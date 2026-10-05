@@ -341,38 +341,6 @@ def test_cli_unknown_root_serial_and_retires_input(tmp_path, monkeypatch):
     assert len(roots) == 2 and all(root() is None for root in roots)
 
 
-def test_cli_preserves_inference_error_when_ane_close_fails(tmp_path, monkeypatch):
-    import sys
-    from types import SimpleNamespace
-
-    import demucs_mlx.model_converter as converter
-    import demucs_mlx.separate as separate
-
-    model = SimpleNamespace(sources=["stem"], samplerate=44100, audio_channels=2)
-    model.models = [model]
-    monkeypatch.setattr(converter, "get_mlx_model", lambda *a: model)
-    closed = []
-
-    class Worker:
-        def close(self):
-            closed.append(1)
-            raise RuntimeError("secondary close error")
-
-    monkeypatch.setitem(sys.modules, "demucs_mlx.ane", SimpleNamespace(WaveformConv=Worker))
-    monkeypatch.setattr(separate, "_load_audio", lambda *a: None)
-    error = OSError("primary inference error")
-
-    def infer(*args, **kwargs):
-        raise error
-
-    monkeypatch.setattr(separate, "_separate_one", infer)
-    with pytest.raises(OSError, match="primary inference error") as caught:
-        separate.main(
-            ["track.wav", "--out", str(tmp_path), "--prefetch-tracks", "0", "--ane-time-encoder"]
-        )
-    assert caught.value is error and closed == [1]
-
-
 def test_idle_worker_releases_view_before_returning_ticket(tmp_path, monkeypatch):
     import weakref
 

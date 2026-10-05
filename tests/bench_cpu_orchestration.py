@@ -5,10 +5,7 @@ Measures:
    - Baseline A: Original .at.add loop
    - Baseline B: Slice assignment loop
    - Orchestrated: Fused Metal kernel
-2. ANE Waveform Convolution Dispatch:
-   - Baseline: PyObjC Core ML dispatch (GIL held)
-   - Orchestrated: Native Objective-C runtime via Grand Central Dispatch (zero-GIL)
-3. End-to-End 120s Audio Separation:
+2. End-to-End 120s Audio Separation:
    - Unorchestrated baseline (pre-orchestration pipeline)
    - Fully orchestrated engine
 """
@@ -156,68 +153,9 @@ def bench_overlap_add():
         f"{max_err_fused:.2e}"
     )
 
-def bench_ane_dispatch():
-    print("\n" + "=" * 78)
-    print("2. ANE WAVEFORM CONVOLUTION DISPATCH BENCHMARK (Batch 8, 120s Audio)")
-    print("=" * 78)
-
-    from demucs_mlx.ane import WaveformConv
-    from demucs_mlx.native_ane import predict_waveform_conv_native
-
-    try:
-        wc = WaveformConv()
-    except Exception as exc:
-        print(f"  [SKIP] ANE model not available or compiled: {exc}")
-        return
-
-    # Simulate batch 8 waveform chunk (8, 2, 343980)
-    rng = np.random.default_rng(123)
-    data = rng.standard_normal((8, 2, 343980)).astype(np.float32)
-    out_target_native = np.empty((8, 48, 85995), dtype=np.float16)
-
-    # Warmup both
-    predict_waveform_conv_native(wc.path, data, out_target_native)
-
-    # Path 1: Native C/ObjC GCD dispatch (Zero-GIL)
-    times_native = []
-    for _ in range(10):
-        t0 = time.perf_counter()
-        ok = predict_waveform_conv_native(wc.path, data, out_target_native)
-        times_native.append((time.perf_counter() - t0) * 1000)
-    assert ok
-
-    # Path 2: PyObjC Core ML dispatch (GIL held)
-    # Temporarily monkey-patch native dispatch to False to force PyObjC
-    import demucs_mlx.native_ane as n_ane
-    orig_fn = n_ane.predict_waveform_conv_native
-    n_ane.predict_waveform_conv_native = lambda *args, **kwargs: False
-    try:
-        # Warmup
-        wc._predict(data)
-        times_pyobjc = []
-        for _ in range(10):
-            t0 = time.perf_counter()
-            out_pyobjc = wc._predict(data)
-            times_pyobjc.append((time.perf_counter() - t0) * 1000)
-    finally:
-        n_ane.predict_waveform_conv_native = orig_fn
-
-    med_pyobjc = np.median(times_pyobjc)
-    med_native = np.median(times_native)
-    native = out_target_native.astype(np.float32)
-    diff = float(np.max(np.abs(native - out_pyobjc.astype(np.float32))))
-
-    print(f"- Baseline (PyObjC Core ML, GIL held):      {med_pyobjc:6.2f} ms")
-    print(
-        f"- Orchestrated (Native GCD C/ObjC, No GIL): {med_native:6.2f} ms "
-        f"({med_pyobjc/med_native:.2f}x speedup)"
-    )
-    print(f"- Parity Difference:                       {diff:.6g} (Bit-exact: {diff == 0.0})")
-
-
 def bench_end_to_end():
     print("\n" + "=" * 78)
-    print("3. END-TO-END 120s AUDIO SEPARATION (Thermally Gated Comparison)")
+    print("2. END-TO-END 120s AUDIO SEPARATION (Thermally Gated Comparison)")
     print("=" * 78)
 
     from demucs_mlx.api import Separator
@@ -257,5 +195,4 @@ def bench_end_to_end():
 
 if __name__ == "__main__":
     bench_overlap_add()
-    bench_ane_dispatch()
     bench_end_to_end()

@@ -25,7 +25,6 @@ class Separator:
         batch_size: tp.Optional[int | str] = DEFAULT_BATCH_SIZE,
         callback: tp.Optional[tp.Callable[[dict], None]] = None,
         callback_arg: tp.Optional[dict] = None,
-        ane_time_encoder: bool = False,
         stem: tp.Optional[str] = None,
         compile: tp.Optional[bool] = None,
         auto_tune: bool = False,
@@ -47,26 +46,13 @@ class Separator:
         if segment is not None and float(segment) <= 0:
             raise ValueError("segment must be > 0 when provided.")
         if auto_tune or batch_size is None or str(batch_size).lower() == "auto":
-            if ane_time_encoder:
-                from .hardware import optimal_batch_size
-                effective_batch_size = optimal_batch_size()
-            else:
-                effective_batch_size = "auto"
+            effective_batch_size = "auto"
         elif int(batch_size) <= 0:
             raise ValueError("batch_size must be > 0.")
         else:
             effective_batch_size = int(batch_size)
         if stem is not None and model != "htdemucs_ft":
             raise ValueError("Single-stem acceleration only supports htdemucs_ft")
-        if ane_time_encoder:
-            if model != "htdemucs":
-                raise ValueError("ANE waveform path only supports the default htdemucs model")
-            if segment is not None and float(segment) != 7.8:
-                raise ValueError("ANE waveform path requires 7.8-second segments")
-            if not split:
-                raise ValueError("ANE waveform path requires split=True")
-            if int(effective_batch_size) <= 0:
-                raise ValueError("ANE waveform path requires batch_size > 0")
         if seed is not None:
             try:
                 seed = int(seed)
@@ -83,7 +69,6 @@ class Separator:
         self.progress = progress
         self.callback = callback
         self.callback_arg = callback_arg
-        self._ane_requested = bool(ane_time_encoder)
         self.compile = compile
         self._closed = False
 
@@ -117,22 +102,9 @@ class Separator:
             raise ValueError(f"Unknown stem {stem!r}; available: {', '.join(self._model.sources)}")
         self.stem = stem
         self._source_index = self._model.sources.index(stem) if stem is not None else None
-        self._ane_worker = None
-        if ane_time_encoder:
-            from .ane import WaveformConv
-
-            if len(self._model.models) != 1:
-                raise RuntimeError("ANE waveform path requires a single HTDemucs model")
-            self._ane_worker = WaveformConv()
-            self._model.models[0]._ane_time_conv = self._ane_worker
 
     def close(self) -> None:
         self._closed = True
-        if self._ane_worker is not None:
-            self._ane_worker.close()
-            if getattr(self._model.models[0], "_ane_time_conv", None) is self._ane_worker:
-                del self._model.models[0]._ane_time_conv
-            self._ane_worker = None
 
     def __enter__(self):
         if self._closed:
@@ -216,8 +188,6 @@ class Separator:
         *,
         return_mx: bool = False,
     ) -> tp.Tuple[tp.Any, tp.Dict[str, tp.Any]]:
-        if self._ane_requested and self._closed:
-            raise RuntimeError("ANE Separator is closed")
         import mlx.core as mx
 
         from .apply_mlx import apply_model

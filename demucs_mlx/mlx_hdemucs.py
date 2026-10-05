@@ -155,20 +155,15 @@ class HEncLayer(nn.Module):
         if dconv:
             self.dconv = DConv(chout, **dconv_kw)
 
-    def __call__(self, x, inject=None, precomputed_conv=None):
-        if precomputed_conv is None:
-            if not self.freq and x.ndim == 4:
-                B, C, Fr, T = x.shape
-                x = x.reshape(B, -1, T)
-            if not self.freq:
-                le = x.shape[-1]
-                if le % self.stride != 0:
-                    x = pad1d(x, (0, self.stride - (le % self.stride)))
-            y = self.conv(x)
-        else:
-            if self.freq:
-                raise ValueError("precomputed_conv is only supported for the waveform path")
-            y = precomputed_conv
+    def __call__(self, x, inject=None):
+        if not self.freq and x.ndim == 4:
+            B, C, Fr, T = x.shape
+            x = x.reshape(B, -1, T)
+        if not self.freq:
+            le = x.shape[-1]
+            if le % self.stride != 0:
+                x = pad1d(x, (0, self.stride - (le % self.stride)))
+        y = self.conv(x)
         if self.empty:
             return y
         if inject is not None:

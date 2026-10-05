@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import random
-import time
 import typing as tp
 import warnings
 import weakref
@@ -32,7 +31,6 @@ def _forward(
     model: tp.Any,
     x: mx.array,
     compile: tp.Optional[bool] = None,
-    precomputed_conv: tp.Optional[mx.array] = None,
     defer: bool = False,
     **kwargs: tp.Any,
 ) -> mx.array:
@@ -49,12 +47,9 @@ def _forward(
     else:
         enabled = bool(compile)
     def _call(m, tensor):
-        if precomputed_conv is not None:
-            return m(tensor, precomputed_conv=precomputed_conv, **kwargs)
         return m(tensor, **kwargs)
 
-    needs_ane_conv = getattr(model, "_ane_time_conv", None) is not None and precomputed_conv is None
-    if not enabled or kwargs or needs_ane_conv:
+    if not enabled or kwargs:
         return _call(model, x)
 
     with outer_compile_context(True):
@@ -73,11 +68,8 @@ def _forward(
             slot = (ref, {})
             _COMPILED_FORWARDS[model_id] = slot
         ref, per_shape = slot
-        conv_key = None
-        if precomputed_conv is not None:
-            conv_key = (tuple(precomputed_conv.shape), str(precomputed_conv.dtype))
         dconv_enabled = "1" if is_dconv_compile_enabled() else "0"
-        key = (tuple(x.shape), str(x.dtype), conv_key, dconv_enabled)
+        key = (tuple(x.shape), str(x.dtype), dconv_enabled)
         if defer and key not in per_shape:
             per_shape[key] = None
             return _call(model, x)
@@ -87,13 +79,8 @@ def _forward(
         # fresh, untraced inputs even when it is built inside this trace.
         compiled = per_shape.get(key)
         if compiled is None:
-            if precomputed_conv is not None:
-                compiled = mx.compile(lambda t, c, _ref=ref: _live(_ref)(t, precomputed_conv=c))
-            else:
-                compiled = mx.compile(lambda t, _ref=ref: _live(_ref)(t))
+            compiled = mx.compile(lambda t, _ref=ref: _live(_ref)(t))
             per_shape[key] = compiled
-        if precomputed_conv is not None:
-            return compiled(x, precomputed_conv)
         return compiled(x)
 
 
@@ -380,11 +367,6 @@ def apply_model(
 
         full_padded = padded_length(segment_length)
 
-        # Check if ANE worker is present for pipelined prefetching
-        ane_worker = getattr(model, "_ane_time_conv", None)
-        if ane_worker is None and hasattr(model, "models") and len(model.models) > 0:
-            ane_worker = getattr(model.models[0], "_ane_time_conv", None)
-
         # Batch consecutive chunks that run at the same input length.
         batches_indices = []
         current = []
@@ -425,8 +407,6 @@ def apply_model(
             stacked = mx.stack(inputs)
             b_seg, b_audio, ch, seg_len = stacked.shape
             flat = stacked.reshape(b_seg * b_audio, ch, seg_len)
-            if ane_worker is not None:
-                mx.eval(flat)
             return flat, group, actual_count, b_seg, b_audio
 
         ola = _StreamingOverlapAdd(
@@ -435,40 +415,24 @@ def apply_model(
         with outer_compile_context(compile_enabled):
             try:
                 next_batch_data = None
-                next_fut = None
                 if batches_indices:
                     next_batch_data = prepare_batch(batches_indices[0])
-                    if ane_worker is not None:
-                        next_fut = ane_worker.submit(next_batch_data[0])
 
                 for b_idx in range(len(batches_indices)):
                     if _check_cancel is not None:
                         _check_cancel()
                     assert next_batch_data is not None
                     flat, group, actual_count, b_seg, b_audio = next_batch_data
-                    curr_fut = next_fut
 
                     if b_idx + 1 < len(batches_indices):
                         next_batch_data = prepare_batch(batches_indices[b_idx + 1])
-                        if ane_worker is not None:
-                            next_fut = ane_worker.submit(next_batch_data[0])
                     else:
                         next_batch_data = None
-                        next_fut = None
-
-                    conv_mx = None
-                    if curr_fut is not None:
-                        wait_start = time.perf_counter()
-                        conv = curr_fut.result()
-                        ane_worker.wait_seconds += time.perf_counter() - wait_start
-                        transfer_start = time.perf_counter()
-                        conv_mx = conv  # the Core ML bridge returns MLX arrays
-                        ane_worker.transfer_seconds += time.perf_counter() - transfer_start
 
                     # Full-segment shapes recur within a track and across tracks;
                     # a valid-length tail is usually unique to its track.
                     batch_out_flat = _forward(
-                        model, flat, compile=compile, precomputed_conv=conv_mx,
+                        model, flat, compile=compile,
                         defer=padded_length(group[0][2]) != full_padded,
                     )
                     _, sources, out_c, out_t = batch_out_flat.shape
